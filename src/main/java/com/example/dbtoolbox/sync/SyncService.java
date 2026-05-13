@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 @Service
 public class SyncService {
@@ -210,15 +211,16 @@ public class SyncService {
             source.setReadOnly(true);
             source.setAutoCommit(false);
             target.setAutoCommit(false);
-            String selectSql = selectSql(sourceDialect, task);
-            List<UpsertColumn> targetColumns = targetColumns(task, target, targetConfig);
+            List<FieldMapping> activeMappings = activeMappings(task);
+            String selectSql = selectSql(sourceDialect, task, activeMappings);
+            List<UpsertColumn> targetColumns = targetColumns(task, activeMappings, target, targetConfig);
             String upsertSql = targetDialect.upsertSql(task.getTargetTable(), targetColumns, task.getMatchKeys());
             try (PreparedStatement select = source.prepareStatement(selectSql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
                  PreparedStatement upsert = target.prepareStatement(upsertSql)) {
                 select.setFetchSize(task.getFetchSize() <= 0 ? 1000 : task.getFetchSize());
-                CsvUtils.writeRow(failureWriter, failureHeader(task), failureFormat);
+                CsvUtils.writeRow(failureWriter, failureHeader(activeMappings), failureFormat);
                 try (ResultSet rs = select.executeQuery()) {
-                    streamRows(rs, upsert, target, task, failureWriter, failureFormat, context);
+                    streamRows(rs, upsert, target, activeMappings, task, failureWriter, failureFormat, context);
                 }
             }
         }
@@ -228,6 +230,7 @@ public class SyncService {
     private void streamRows(ResultSet rs,
                             PreparedStatement upsert,
                             Connection target,
+                            List<FieldMapping> activeMappings,
                             SyncTask task,
                             Writer failureWriter,
                             CsvFormat failureFormat,
@@ -235,7 +238,7 @@ public class SyncService {
         int batchSize = task.getBatchSize() <= 0 ? 1000 : task.getBatchSize();
         List<List<Object>> batchRows = new ArrayList<List<Object>>();
         while (rs.next()) {
-            List<Object> values = rowValues(rs, task);
+            List<Object> values = rowValues(rs, activeMappings);
             batchRows.add(values);
             if (batchRows.size() >= batchSize) {
                 flushBatch(upsert, target, batchRows, failureWriter, failureFormat, context);
@@ -266,8 +269,15 @@ public class SyncService {
             /*
              * 批量写入失败后降级为逐行写入，目的是尽量同步可成功的数据，
              * 同时把失败行和失败原因写到 data/failures，方便事后定位脏数据。
+             * 注意：executeBatch 抛异常后，部分驱动仍然保留剩余未执行的 batch 条目，
+             * 必须显式 clearBatch，否则下一批 addBatch 会和上一批失败的行混在一起重发。
              */
             target.rollback();
+            try {
+                upsert.clearBatch();
+            } catch (Exception ignored) {
+                // 驱动不支持 clearBatch 时退化为信任 rollback。
+            }
             for (List<Object> row : rows) {
                 try {
                     bind(upsert, row);
@@ -292,17 +302,31 @@ public class SyncService {
         }
     }
 
-    private List<Object> rowValues(ResultSet rs, SyncTask task) throws Exception {
+    private List<FieldMapping> activeMappings(SyncTask task) {
+        /*
+         * 字段映射现在带 enabled 开关：禁用行仍然保存到模板，但执行同步时跳过。
+         * 所有 SELECT 列、目标列、参数绑定都必须基于"启用行"，否则会出现"读 5 列写 4 列"的错位。
+         */
+        List<FieldMapping> active = new ArrayList<FieldMapping>();
+        for (FieldMapping mapping : task.getFieldMappings()) {
+            if (mapping.isEnabled()) {
+                active.add(mapping);
+            }
+        }
+        return active;
+    }
+
+    private List<Object> rowValues(ResultSet rs, List<FieldMapping> activeMappings) throws Exception {
         List<Object> values = new ArrayList<Object>();
-        for (int i = 0; i < task.getFieldMappings().size(); i++) {
+        for (int i = 0; i < activeMappings.size(); i++) {
             values.add(rs.getObject(i + 1));
         }
         return values;
     }
 
-    private String selectSql(DatabaseDialect dialect, SyncTask task) {
+    private String selectSql(DatabaseDialect dialect, SyncTask task, List<FieldMapping> activeMappings) {
         List<String> columns = new ArrayList<String>();
-        for (FieldMapping mapping : task.getFieldMappings()) {
+        for (FieldMapping mapping : activeMappings) {
             columns.add(dialect.quoteIdentifier(mapping.getSourceColumn()));
         }
         StringBuilder sql = new StringBuilder("SELECT ")
@@ -315,27 +339,51 @@ public class SyncService {
         return sql.toString();
     }
 
-    private List<UpsertColumn> targetColumns(SyncTask task, Connection target, DataSourceConfig targetConfig) throws Exception {
-        Map<String, String> targetTypes = targetConfig.getType() == DatabaseType.GAUSSDB
+    private List<UpsertColumn> targetColumns(SyncTask task,
+                                             List<FieldMapping> activeMappings,
+                                             Connection target,
+                                             DataSourceConfig targetConfig) throws Exception {
+        boolean gauss = targetConfig.getType() == DatabaseType.GAUSSDB;
+        Map<String, String> targetTypes = gauss
                 ? gaussTargetColumnTypes(target, task.getTargetTable())
-                : new LinkedHashMap<String, String>();
+                : new TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER);
         List<UpsertColumn> columns = new ArrayList<UpsertColumn>();
-        for (FieldMapping mapping : task.getFieldMappings()) {
-            columns.add(new UpsertColumn(mapping.getTargetColumn(), targetTypes.get(mapping.getTargetColumn())));
+        List<String> missing = new ArrayList<String>();
+        for (FieldMapping mapping : activeMappings) {
+            String targetColumn = mapping.getTargetColumn();
+            String typeName = targetTypes.get(targetColumn);
+            if (gauss && typeName == null) {
+                /*
+                 * GaussDB MERGE INTO 子查询里 ? 会被推断为 text，导致 timestamptz/numeric 等列
+                 * 报"不能从 text 转换到目标类型"。这里宁可让任务在启动阶段直接失败，也不要让
+                 * 类型推断退化到原 bug 的静默回退路径，因此目标列必须能在 pg_catalog 里查到。
+                 */
+                missing.add(targetColumn);
+            }
+            columns.add(new UpsertColumn(targetColumn, typeName));
+        }
+        if (!missing.isEmpty()) {
+            throw new AppException("无法在目标库读取以下列的类型: " + String.join(", ", missing)
+                    + "。请确认目标表 " + task.getTargetTable()
+                    + " 在当前 schema 下存在，且列名大小写与 pg_catalog 中一致。");
         }
         return columns;
     }
 
     private Map<String, String> gaussTargetColumnTypes(Connection connection, String rawTableName) throws Exception {
         QualifiedTable table = parseQualifiedTable(rawTableName);
-        Map<String, String> columns = new LinkedHashMap<String, String>();
+        /*
+         * 用大小写不敏感的 TreeMap 做查表，避免用户在前端写 "Updated_At" 而 pg_catalog 实际是
+         * updated_at 时 lookup 落空。后续 SQL 里依然使用用户给的列名 quote，仅 lookup 阶段忽略大小写。
+         */
+        Map<String, String> columns = new TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER);
         String sql = "SELECT a.attname AS column_name, "
                 + "pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type "
                 + "FROM pg_catalog.pg_class c "
                 + "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
                 + "JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid "
-                + "WHERE n.nspname = COALESCE(?, current_schema()) "
-                + "AND c.relname = ? "
+                + "WHERE lower(n.nspname) = lower(COALESCE(?, current_schema())) "
+                + "AND lower(c.relname) = lower(?) "
                 + "AND a.attnum > 0 "
                 + "AND NOT a.attisdropped "
                 + "ORDER BY a.attnum";
@@ -360,7 +408,12 @@ public class SyncService {
         if (parts.length == 2) {
             return new QualifiedTable(unquoteIdentifier(parts[0]), unquoteIdentifier(parts[1]));
         }
-        throw new AppException("非法数据库表名: " + rawTableName);
+        /*
+         * 当前不支持 schema 或 table 本身包含点号，例如 "schema.with.dot"."tbl"。
+         * 把限制直接写进报错信息，避免现场拿到一句"非法数据库表名"无法判断要怎么改。
+         */
+        throw new AppException("表名格式不支持: " + rawTableName
+                + "。schema 和 table 都不能包含点号；当前只支持 table 或 schema.table 形式。");
     }
 
     private String unquoteIdentifier(String value) {
@@ -375,18 +428,13 @@ public class SyncService {
         return trimmed;
     }
 
-    private List<String> failureHeader(SyncTask task) {
-        List<String> headers = targetColumnNames(task);
+    private List<String> failureHeader(List<FieldMapping> activeMappings) {
+        List<String> headers = new ArrayList<String>();
+        for (FieldMapping mapping : activeMappings) {
+            headers.add(mapping.getTargetColumn());
+        }
         headers.add("failure_reason");
         return headers;
-    }
-
-    private List<String> targetColumnNames(SyncTask task) {
-        List<String> columns = new ArrayList<String>();
-        for (FieldMapping mapping : task.getFieldMappings()) {
-            columns.add(mapping.getTargetColumn());
-        }
-        return columns;
     }
 
     private void validate(SyncTaskRequest request) {
@@ -396,6 +444,7 @@ public class SyncService {
         task.setTargetDatasourceId(request.getTargetDatasourceId());
         task.setSourceTable(request.getSourceTable());
         task.setTargetTable(request.getTargetTable());
+        task.setWhereClause(request.getWhereClause());
         task.setFieldMappings(request.getFieldMappings());
         task.setMatchKeys(request.getMatchKeys());
         task.setPartitionRule(request.getPartitionRule());
@@ -414,18 +463,91 @@ public class SyncService {
         if (task.getMatchKeys() == null || task.getMatchKeys().isEmpty()) {
             throw new AppException("匹配键不能为空");
         }
-        Set<String> targetColumns = new LinkedHashSet<String>();
+        /*
+         * 字段映射的"启用"开关：保存阶段允许有禁用行（用户保留备用），
+         * 但启用行至少要有一条且 source/target 都必须非空，否则 selectSql 会拼出空 SELECT 列表。
+         * 匹配键也必须出现在启用行的目标字段里，否则同步会按禁用列做 ON 条件，必然落空。
+         */
+        Set<String> activeTargetColumns = new LinkedHashSet<String>();
+        int activeCount = 0;
         for (FieldMapping mapping : task.getFieldMappings()) {
+            if (!mapping.isEnabled()) {
+                continue;
+            }
+            activeCount++;
             StringChecks.requireText(mapping.getSourceColumn(), "源字段不能为空");
             String targetColumn = StringChecks.requireText(mapping.getTargetColumn(), "目标字段不能为空");
-            targetColumns.add(targetColumn);
+            activeTargetColumns.add(targetColumn);
+        }
+        if (activeCount == 0) {
+            throw new AppException("至少需要启用一条字段映射");
         }
         for (String key : task.getMatchKeys()) {
-            if (!targetColumns.contains(key)) {
-                throw new AppException("匹配键必须是目标字段映射之一: " + key);
+            if (!activeTargetColumns.contains(key)) {
+                throw new AppException("匹配键必须是启用的目标字段映射之一: " + key);
             }
         }
+        validateWhereClause(task.getWhereClause());
+        validateNotSelfSync(task);
         validatePartitionRule(task.getPartitionRule());
+    }
+
+    private void validateWhereClause(String whereClause) {
+        if (!StringChecks.hasText(whereClause)) {
+            return;
+        }
+        /*
+         * whereClause 会原样拼接到 SELECT 之后，不做参数化。这里禁止常见的多语句/注释片段，
+         * 把"在 WHERE 里挂另一段 SQL"的风险拦在保存阶段。仍然不能完全替代参数化，但是足以
+         * 把意外/手抖触发的多语句注入挡住，配合本工具仅 127.0.0.1 的部署是合理的折中。
+         */
+        String value = whereClause.trim();
+        if (value.contains(";")) {
+            throw new AppException("源表 WHERE 条件不允许包含分号");
+        }
+        if (value.contains("--") || value.contains("/*") || value.contains("*/")) {
+            throw new AppException("源表 WHERE 条件不允许包含 SQL 注释片段（--、/*、*/）");
+        }
+        long singleQuotes = 0;
+        for (int i = 0; i < value.length(); i++) {
+            if (value.charAt(i) == '\'') {
+                singleQuotes++;
+            }
+        }
+        if ((singleQuotes & 1L) == 1L) {
+            throw new AppException("源表 WHERE 条件中的单引号必须成对出现");
+        }
+    }
+
+    private void validateNotSelfSync(SyncTask task) {
+        if (!task.getSourceDatasourceId().equals(task.getTargetDatasourceId())) {
+            return;
+        }
+        /*
+         * 同库同表同步会读到刚刚 upsert 进去的数据，且在 autoCommit=false 的写事务下
+         * 容易和流式读发生锁等待/死锁。明确拒绝，避免现场出现一个"看起来在跑但永远不结束"的任务。
+         * 比较时去掉引号、按小写归一，避免 "user.Order" vs user.order 这种判错。
+         */
+        String source = normalizeQualifiedName(task.getSourceTable());
+        String target = normalizeQualifiedName(task.getTargetTable());
+        if (source.equals(target)) {
+            throw new AppException("同步源和目标指向同一数据源的同一张表，会读写自身导致死锁，已拒绝。");
+        }
+    }
+
+    private String normalizeQualifiedName(String rawName) {
+        if (!StringChecks.hasText(rawName)) {
+            return "";
+        }
+        String[] parts = rawName.trim().split("\\.");
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < parts.length; i++) {
+            if (i > 0) {
+                builder.append('.');
+            }
+            builder.append(unquoteIdentifier(parts[i]).toLowerCase());
+        }
+        return builder.toString();
     }
 
     private void validatePartitionRule(PartitionRule rule) {

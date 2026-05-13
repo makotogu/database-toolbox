@@ -12,3 +12,4 @@ spring:
 toolbox:
   storage-root: data
   job-pool-size: 4
+  max-job-history: 200

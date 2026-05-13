@@ -162,14 +162,23 @@ function mappingRowHtml(row) {
 }
 
 function targetColumnOptions(selected) {
+    /*
+     * 旧模板里保存的列名大小写可能和当前从目标库读到的不一致（例如旧 "ID" 对应库里实际是 "id"）。
+     * 大小写不敏感地比对 selected 是否已经在下拉中存在，避免重复追加一个 fallback 选项，
+     * 同时优先把 selected 指向库里实际名字，让保存后端 lookup 不再落空。
+     */
     const options = ['<option value="">不匹配</option>'];
-    const hasSelected = currentTargetColumns.some(column => column.columnName === selected);
+    const lowerSelected = selected ? String(selected).toLowerCase() : '';
+    const match = lowerSelected
+            ? currentTargetColumns.find(column => String(column.columnName || '').toLowerCase() === lowerSelected)
+            : null;
+    const effectiveSelected = match ? match.columnName : selected;
     currentTargetColumns.forEach(column => {
         const name = column.columnName || '';
-        options.push('<option value="' + escapeHtml(name) + '"' + (name === selected ? ' selected' : '') + '>' + escapeHtml(name) + '</option>');
+        options.push('<option value="' + escapeHtml(name) + '"' + (name === effectiveSelected ? ' selected' : '') + '>' + escapeHtml(name) + '</option>');
     });
-    if (selected && !hasSelected) {
-        options.push('<option value="' + escapeHtml(selected) + '" selected>' + escapeHtml(selected) + '</option>');
+    if (effectiveSelected && !match) {
+        options.push('<option value="' + escapeHtml(effectiveSelected) + '" selected>' + escapeHtml(effectiveSelected) + '</option>');
     }
     return options.join('');
 }
@@ -279,6 +288,9 @@ function bind(root, tasks, datasources) {
         event.preventDefault();
         try {
             syncMappingRowsFromDom(event.target);
+            if (!ensureMappingTextApplied(event.target)) {
+                return;
+            }
             await apiPost('/api/sync-tasks', payload(event.target));
             editingTask = null;
             toast('同步模板已保存');
@@ -516,13 +528,19 @@ function rowsFromMappingText(text) {
 }
 
 function rowsToMappingText(rows) {
-    return (rows || []).filter(row => row.sourceColumn && row.targetColumn).map(row => row.sourceColumn + '=' + row.targetColumn).join('\n');
+    /*
+     * 高级文本框只反映"启用且字段都已填"的行：
+     * 1. 文本模式语义只有 source=target，承担不了 enabled 信息；
+     * 2. 把禁用行也展示出来会让"从文本导入表格"把所有行重新置为启用，造成回退。
+     */
+    return (rows || []).filter(row => row.enabled && row.sourceColumn && row.targetColumn).map(row => row.sourceColumn + '=' + row.targetColumn).join('\n');
 }
 
 function resetMappingRows(task) {
     currentTargetColumns = [];
     mappingRows = (task && task.fieldMappings ? task.fieldMappings : []).map(item => createMappingRow({
-        enabled: true,
+        // 旧模板里没有 enabled 字段，等价于全部启用；新模板尊重保存时的开关。
+        enabled: item.enabled === undefined ? true : !!item.enabled,
         sourceColumn: item.sourceColumn,
         targetColumn: item.targetColumn,
         status: 'CUSTOM'
@@ -542,6 +560,28 @@ function createMappingRow(values) {
         primaryKey: !!row.primaryKey,
         status: row.status || (row.targetColumn ? 'MATCHED' : 'UNMATCHED')
     };
+}
+
+function ensureMappingTextApplied(form) {
+    /*
+     * 用户经常在"高级文本模式"的 textarea 里改完直接点保存。表格里没点过"从文本导入表格"，
+     * 这部分修改在保存时会被静默丢弃。这里在提交前比对两边内容，差异显著就让用户显式确认是
+     * 否以文本框为准，避免"我明明改了"的误操作。
+     */
+    const textarea = form.querySelector('#field-mapping-text');
+    if (!textarea) {
+        return true;
+    }
+    const textValue = String(textarea.value || '').trim();
+    const expected = rowsToMappingText(mappingRows).trim();
+    if (textValue === expected) {
+        return true;
+    }
+    if (!confirm('高级文本模式有未应用到表格的修改，是否以文本框内容覆盖当前表格后再保存？')) {
+        return false;
+    }
+    mappingRows = rowsFromMappingText(textValue);
+    return true;
 }
 
 function syncMappingRowsFromDom(form) {
@@ -739,9 +779,14 @@ function payload(form) {
         targetTable: data.targetTable,
         whereClause: data.whereClause,
         matchKeys: String(data.matchKeys || '').split(',').map(item => item.trim()).filter(Boolean),
-        fieldMappings: mappingRows.filter(row => row.enabled && row.sourceColumn && row.targetColumn).map(row => ({
+        /*
+         * 字段映射保存策略：只要 source/target 都填了就一起持久化，禁用行也保留，
+         * 这样用户"先关掉再开"不会因为重新进页面发现配置丢了。后端执行时按 enabled 字段过滤。
+         */
+        fieldMappings: mappingRows.filter(row => row.sourceColumn && row.targetColumn).map(row => ({
             sourceColumn: row.sourceColumn,
-            targetColumn: row.targetColumn
+            targetColumn: row.targetColumn,
+            enabled: !!row.enabled
         })),
         partitionRule: {
             enabled: data.partitionEnabled === 'true',

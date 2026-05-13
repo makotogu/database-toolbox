@@ -101,21 +101,45 @@ public class GaussDbDialect implements DatabaseDialect {
         String normalized = normalizeTypeAlias(typeName.trim());
         /*
          * 类型名来自数据库系统目录。这里仍做白名单过滤，避免把异常内容拼进 SQL。
-         * 覆盖 GaussDB 常见格式：timestamp with time zone、numeric(12,2)、character varying(64)、schema."type"。
+         * 覆盖 GaussDB 常见格式：timestamp with time zone、numeric(12,2)、character varying(64)、
+         * schema."type"、text[]、numeric(12,2)[]。
          */
-        if (!normalized.matches("[A-Za-z0-9_ .,\"()]+")) {
+        if (!normalized.matches("[A-Za-z0-9_ .,\"()\\[\\]]+")) {
             return null;
         }
         return normalized;
     }
 
     private String normalizeTypeAlias(String typeName) {
+        /*
+         * format_type 在 openGauss 上可能返回内部别名（int4/int8/bpchar 等），
+         * 这些别名 CAST 时不一定被接受，统一映射成 SQL 标准名称。
+         * 同时容忍前端传入的 timestampz/timetz 这两个常见写错的简写。
+         */
         String lower = typeName.toLowerCase();
         if ("timestampz".equals(lower) || "timestamptz".equals(lower)) {
             return "timestamp with time zone";
         }
         if ("timetz".equals(lower)) {
             return "time with time zone";
+        }
+        if ("int2".equals(lower)) {
+            return "smallint";
+        }
+        if ("int4".equals(lower)) {
+            return "integer";
+        }
+        if ("int8".equals(lower)) {
+            return "bigint";
+        }
+        if ("float4".equals(lower)) {
+            return "real";
+        }
+        if ("float8".equals(lower)) {
+            return "double precision";
+        }
+        if (lower.startsWith("bpchar")) {
+            return "character" + typeName.substring("bpchar".length());
         }
         return typeName;
     }

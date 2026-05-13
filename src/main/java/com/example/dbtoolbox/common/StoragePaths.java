@@ -34,4 +34,8 @@ public class StoragePaths {
     public Path keyFile() {
         return configDir().resolve("master.key");
     }
+
+    public Path jobHistoryFile() {
+        return configDir().resolve("jobs.json");
+    }
 }
