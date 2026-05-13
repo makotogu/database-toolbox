@@ -1,0 +1,30 @@
+name: db-toolbox
+
+services:
+  toolbox-mysql:
+    image: mysql:8.0
+    container_name: db-toolbox-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root123456
+      MYSQL_DATABASE: toolbox_test
+      MYSQL_USER: toolbox
+      MYSQL_PASSWORD: toolbox123
+      TZ: Asia/Shanghai
+    ports:
+      - "3307:3306"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+    volumes:
+      - toolbox_mysql_data:/var/lib/mysql
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -utoolbox -ptoolbox123 --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  toolbox_mysql_data:

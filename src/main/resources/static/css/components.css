@@ -1,0 +1,211 @@
+.panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+}
+
+.panel-header {
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.panel-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.panel-body {
+    padding: 18px;
+}
+
+.form {
+    display: grid;
+    gap: 14px;
+}
+
+.field {
+    display: grid;
+    gap: 6px;
+}
+
+.field label {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.input,
+.select,
+.textarea {
+    width: 100%;
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    border-radius: 7px;
+    padding: 9px 10px;
+    color: var(--text);
+    outline: 0;
+}
+
+.textarea {
+    min-height: 120px;
+    resize: vertical;
+    line-height: 1.45;
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.button-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.btn {
+    border: 1px solid var(--line-strong);
+    border-radius: 7px;
+    background: #fff;
+    color: var(--text);
+    padding: 9px 12px;
+    min-height: 36px;
+}
+
+.btn:hover {
+    border-color: var(--accent);
+}
+
+.btn.primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+
+.btn.primary:hover {
+    background: var(--accent-strong);
+}
+
+.btn.danger {
+    color: var(--danger);
+    border-color: #e4b6b6;
+}
+
+.btn.ghost {
+    background: transparent;
+}
+
+.btn.compact {
+    min-height: 28px;
+    padding: 4px 9px;
+    font-size: 12px;
+}
+
+.table-wrap {
+    overflow: auto;
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 720px;
+}
+
+.table th,
+.table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: top;
+}
+
+.table th {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    background: #f9faf8;
+}
+
+.table tr:hover td {
+    background: #fbfcfb;
+}
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.badge.success {
+    background: #dceee2;
+    color: var(--success);
+}
+
+.badge.warn {
+    background: #f6ead8;
+    color: var(--warn);
+}
+
+.badge.danger {
+    background: #f3dddd;
+    color: var(--danger);
+}
+
+.muted {
+    color: var(--muted);
+}
+
+.toast-root {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    display: grid;
+    gap: 10px;
+    z-index: 10;
+}
+
+.toast {
+    min-width: 260px;
+    max-width: 380px;
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: #17211d;
+    color: #fff;
+    box-shadow: var(--shadow);
+    animation: toast-in .18s ease-out;
+}
+
+.toast.error {
+    background: #7f2d2d;
+}
+
+@keyframes toast-in {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
