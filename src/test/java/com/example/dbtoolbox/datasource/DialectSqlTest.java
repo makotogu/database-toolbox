@@ -1,10 +1,12 @@
 package com.example.dbtoolbox.datasource;
 
+import com.example.dbtoolbox.common.AppException;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DialectSqlTest {
@@ -85,9 +87,11 @@ class DialectSqlTest {
     }
 
     @Test
-    void fallsBackToPlainPlaceholderWhenGaussDbTypeUnknown() {
+    void fallsBackToPlainPlaceholderWhenGaussDbTypeIsNull() {
         GaussDbDialect dialect = new GaussDbDialect();
 
+        // typeName=null 代表"上游没拿到类型"，dialect 退化到 ? 是历史 caller 的合法用法。
+        // SyncService 走 GaussDB 路径时会先在 pg_catalog 校验到非 null，再传给 dialect。
         String sql = dialect.upsertSql("test_unknown",
                 Arrays.asList(
                         new UpsertColumn("id", "bigint"),
@@ -97,6 +101,22 @@ class DialectSqlTest {
         assertTrue(sql.contains("CAST(? AS bigint) AS \"id\""), sql);
         assertTrue(sql.contains("? AS \"payload\""), sql);
         assertTrue(!sql.contains("CAST(? AS null)"), sql);
+    }
+
+    @Test
+    void throwsWhenGaussDbTypeIsRejectedByWhitelist() {
+        GaussDbDialect dialect = new GaussDbDialect();
+
+        /*
+         * 非空但含分号的类型名必须抛错，绝不能回退到 "?"。否则 GaussDB MERGE 子查询里
+         * 还会被推断成 text，把"types could not be determined"这个 bug 再次带回来。
+         */
+        AppException ex = assertThrows(AppException.class, () -> dialect.upsertSql("test_unsafe",
+                Arrays.asList(
+                        new UpsertColumn("id", "bigint"),
+                        new UpsertColumn("payload", "int; DROP TABLE x")),
+                Arrays.asList("id")));
+        assertTrue(ex.getMessage().contains("无法识别的 GaussDB 列类型"), ex.getMessage());
     }
 
     @Test

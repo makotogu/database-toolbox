@@ -1,5 +1,6 @@
 package com.example.dbtoolbox.datasource;
 
+import com.example.dbtoolbox.common.AppException;
 import com.example.dbtoolbox.common.StringChecks;
 
 import java.io.UnsupportedEncodingException;
@@ -96,16 +97,21 @@ public class GaussDbDialect implements DatabaseDialect {
 
     private String safeCastType(String typeName) {
         if (!StringChecks.hasText(typeName)) {
+            // 没拿到类型时由上层决定是否补 CAST：SyncService 走 GaussDB 路径已要求必须查到类型，
+            // dialect 单测/历史 caller 仍然允许传 null 退化到纯 ?。
             return null;
         }
         String normalized = normalizeTypeAlias(typeName.trim());
         /*
-         * 类型名来自数据库系统目录。这里仍做白名单过滤，避免把异常内容拼进 SQL。
-         * 覆盖 GaussDB 常见格式：timestamp with time zone、numeric(12,2)、character varying(64)、
-         * schema."type"、text[]、numeric(12,2)[]。
+         * 类型名来自数据库系统目录。白名单覆盖 GaussDB 常见格式：
+         * timestamp with time zone、numeric(12,2)、character varying(64)、schema."type"、
+         * text[]、numeric(12,2)[]。
+         * 一旦白名单挡住非空类型，绝不能静默退化到 "?"——否则 GaussDB 又会推断成 text 再触发
+         * "could not determine data type of parameter"。直接报错让上层在保存阶段就停下来排查。
          */
         if (!normalized.matches("[A-Za-z0-9_ .,\"()\\[\\]]+")) {
-            return null;
+            throw new AppException("无法识别的 GaussDB 列类型: " + typeName
+                    + "。请在 GaussDbDialect.normalizeTypeAlias 中补一条映射，或修正目标表的列类型。");
         }
         return normalized;
     }

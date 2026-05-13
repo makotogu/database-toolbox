@@ -37,7 +37,6 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -213,8 +212,8 @@ public class SyncService {
             target.setAutoCommit(false);
             List<FieldMapping> activeMappings = activeMappings(task);
             String selectSql = selectSql(sourceDialect, task, activeMappings);
-            List<UpsertColumn> targetColumns = targetColumns(task, activeMappings, target, targetConfig);
-            String upsertSql = targetDialect.upsertSql(task.getTargetTable(), targetColumns, task.getMatchKeys());
+            PreparedTarget prepared = prepareTarget(task, activeMappings, target, targetConfig);
+            String upsertSql = targetDialect.upsertSql(task.getTargetTable(), prepared.columns, prepared.matchKeys);
             try (PreparedStatement select = source.prepareStatement(selectSql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
                  PreparedStatement upsert = target.prepareStatement(upsertSql)) {
                 select.setFetchSize(task.getFetchSize() <= 0 ? 1000 : task.getFetchSize());
@@ -339,44 +338,65 @@ public class SyncService {
         return sql.toString();
     }
 
-    private List<UpsertColumn> targetColumns(SyncTask task,
-                                             List<FieldMapping> activeMappings,
-                                             Connection target,
-                                             DataSourceConfig targetConfig) throws Exception {
-        boolean gauss = targetConfig.getType() == DatabaseType.GAUSSDB;
-        Map<String, String> targetTypes = gauss
-                ? gaussTargetColumnTypes(target, task.getTargetTable())
-                : new TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER);
+    private PreparedTarget prepareTarget(SyncTask task,
+                                         List<FieldMapping> activeMappings,
+                                         Connection target,
+                                         DataSourceConfig targetConfig) throws Exception {
+        if (targetConfig.getType() != DatabaseType.GAUSSDB) {
+            /*
+             * MySQL 路径维持原状：上游用户写的列名直接交给 dialect，
+             * 大小写折叠由 MySQL 服务端按平台规则处理（Linux 默认大小写敏感）。
+             */
+            List<UpsertColumn> columns = new ArrayList<UpsertColumn>();
+            for (FieldMapping mapping : activeMappings) {
+                columns.add(new UpsertColumn(mapping.getTargetColumn(), null));
+            }
+            return new PreparedTarget(columns, new ArrayList<String>(task.getMatchKeys()));
+        }
+        Map<String, GaussTargetColumn> catalog = gaussTargetColumnTypes(target, task.getTargetTable());
         List<UpsertColumn> columns = new ArrayList<UpsertColumn>();
         List<String> missing = new ArrayList<String>();
         for (FieldMapping mapping : activeMappings) {
-            String targetColumn = mapping.getTargetColumn();
-            String typeName = targetTypes.get(targetColumn);
-            if (gauss && typeName == null) {
+            String userColumn = mapping.getTargetColumn();
+            GaussTargetColumn descriptor = catalog.get(userColumn);
+            if (descriptor == null) {
                 /*
                  * GaussDB MERGE INTO 子查询里 ? 会被推断为 text，导致 timestamptz/numeric 等列
                  * 报"不能从 text 转换到目标类型"。这里宁可让任务在启动阶段直接失败，也不要让
                  * 类型推断退化到原 bug 的静默回退路径，因此目标列必须能在 pg_catalog 里查到。
                  */
-                missing.add(targetColumn);
+                missing.add(userColumn);
+                continue;
             }
-            columns.add(new UpsertColumn(targetColumn, typeName));
+            /*
+             * 用 pg_catalog 真实 attname 而不是用户在模板里填的字面值。前者保证 quoteIdentifier
+             * 出来的 "列名" 能在目标表上命中；前一版只把类型查对了，列名还是用户原文，会出现
+             * "类型对、引号里的列不存在" 的奇怪错误。
+             */
+            columns.add(new UpsertColumn(descriptor.actualName, descriptor.typeName));
         }
         if (!missing.isEmpty()) {
             throw new AppException("无法在目标库读取以下列的类型: " + String.join(", ", missing)
                     + "。请确认目标表 " + task.getTargetTable()
                     + " 在当前 schema 下存在，且列名大小写与 pg_catalog 中一致。");
         }
-        return columns;
+        List<String> matchKeys = new ArrayList<String>();
+        for (String key : task.getMatchKeys()) {
+            GaussTargetColumn descriptor = catalog.get(key);
+            // matchKey 已在 validateTask 里保证一定能命中启用的目标字段；这里只做大小写归一化。
+            matchKeys.add(descriptor != null ? descriptor.actualName : key);
+        }
+        return new PreparedTarget(columns, matchKeys);
     }
 
-    private Map<String, String> gaussTargetColumnTypes(Connection connection, String rawTableName) throws Exception {
+    private Map<String, GaussTargetColumn> gaussTargetColumnTypes(Connection connection, String rawTableName) throws Exception {
         QualifiedTable table = parseQualifiedTable(rawTableName);
         /*
          * 用大小写不敏感的 TreeMap 做查表，避免用户在前端写 "Updated_At" 而 pg_catalog 实际是
-         * updated_at 时 lookup 落空。后续 SQL 里依然使用用户给的列名 quote，仅 lookup 阶段忽略大小写。
+         * updated_at 时 lookup 落空。Value 同时保存 pg_catalog 里的实际 attname，让上层 SQL
+         * 拼接时改用真实大小写，避免 quote 出一个目标表上不存在的列名。
          */
-        Map<String, String> columns = new TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER);
+        Map<String, GaussTargetColumn> columns = new TreeMap<String, GaussTargetColumn>(String.CASE_INSENSITIVE_ORDER);
         String sql = "SELECT a.attname AS column_name, "
                 + "pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type "
                 + "FROM pg_catalog.pg_class c "
@@ -392,7 +412,9 @@ public class SyncService {
             statement.setString(2, table.table);
             try (ResultSet rs = statement.executeQuery()) {
                 while (rs.next()) {
-                    columns.put(rs.getString("column_name"), rs.getString("data_type"));
+                    String actualName = rs.getString("column_name");
+                    String typeName = rs.getString("data_type");
+                    columns.put(actualName, new GaussTargetColumn(actualName, typeName));
                 }
             }
         }
@@ -844,6 +866,26 @@ public class SyncService {
         private QualifiedTable(String schema, String table) {
             this.schema = schema;
             this.table = table;
+        }
+    }
+
+    private static class GaussTargetColumn {
+        private final String actualName;
+        private final String typeName;
+
+        private GaussTargetColumn(String actualName, String typeName) {
+            this.actualName = actualName;
+            this.typeName = typeName;
+        }
+    }
+
+    private static class PreparedTarget {
+        private final List<UpsertColumn> columns;
+        private final List<String> matchKeys;
+
+        private PreparedTarget(List<UpsertColumn> columns, List<String> matchKeys) {
+            this.columns = columns;
+            this.matchKeys = matchKeys;
         }
     }
 
