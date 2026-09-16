@@ -22,7 +22,7 @@ async function completed(){await page.locator('#results .result-state').filter({
   const driver=(await api('/drivers')).find(d=>d.driverClass==='org.h2.Driver'&&d.bundled);
   for(const name of ['A','B']){
    const c=await api('/connections','POST',{name:'Hardening '+name+' '+Date.now(),driverId:driver.id,jdbcUrl:'jdbc:h2:mem:hardening_'+name+'_'+Date.now()+';DB_CLOSE_DELAY=-1',username:'sa',password:''});connections.push(c);
-   const session=await api('/sessions','POST',{connectionId:c.id});sessions.add(session.id);await execute(session.id,'CREATE SCHEMA '+name+'_SCOPE');await api('/sessions/'+session.id,'DELETE');sessions.delete(session.id);
+   const session=await api('/sessions','POST',{connectionId:c.id});sessions.add(session.id);await execute(session.id,'CREATE SCHEMA '+name+'_SCOPE; CREATE TABLE '+name+'_SCOPE.TREE_FIXTURE(ID INT)');await api('/sessions/'+session.id,'DELETE');sessions.delete(session.id);
   }
   browser=await chromium.launch({headless:true,...(process.env.TOOLBOX_CHROME_PATH?{executablePath:process.env.TOOLBOX_CHROME_PATH}:{})});
   page=await browser.newPage({viewport:{width:1440,height:980}});
@@ -54,6 +54,25 @@ async function completed(){await page.locator('#results .result-state').filter({
   await completed();
   assert.deepEqual(await page.locator('#sql-editor').evaluate(el=>({same:el===window.fixtureEditor,focused:document.activeElement===el,start:el.selectionStart,end:el.selectionEnd})),{same:true,focused:true,start:1,end:4});
   console.log('PASS browser: completion keeps editor node, focus and selection');
+
+  let releaseObjects,heldObjects=0;const objectGate=new Promise(resolve=>releaseObjects=resolve);
+  await page.route('**/api/connections/'+connections[1].id+'/objects?*',async route=>{
+   const query=new URL(route.request().url()).searchParams;
+   if(!['tables','routines'].includes(query.get('kind'))||query.get('schema')!=='B_SCOPE')return route.continue();
+   heldObjects++;await objectGate;await route.abort('aborted').catch(()=>{});
+  });
+  await page.locator('[data-action="toggle-connection"][data-id="'+connections[1].id+'"]').click();
+  await page.locator('[data-action="toggle-schema"][data-id="'+connections[1].id+'"][data-schema="B_SCOPE"]').click();
+  const treeError=page.locator('#tree .tree-error').filter({hasText:'读取超时，请重试'});
+  await treeError.waitFor({timeout:20000});assert.equal(heldObjects,2);
+  assert.equal(await treeError.locator('.tree-empty').count(),0);
+  const retry=treeError.getByRole('button',{name:'重试',exact:true});assert.ok(await retry.isVisible());
+  await page.screenshot({path:process.env.TOOLBOX_UI_SCREENSHOT?.replace(/\.png$/,'-tree-timeout.png')||'/tmp/toolbox-tree-timeout.png',fullPage:false});
+  releaseObjects();await page.unrouteAll({behavior:'wait'});
+  await retry.click();
+  await page.locator('[data-action="open-object"][data-id="'+connections[1].id+'"]').filter({hasText:'TREE_FIXTURE'}).waitFor();
+  assert.equal(await treeError.count(),0);
+  console.log('PASS browser: object read deadline shows timeout, retry restores the real table');
 
   let releasePoll,pollCaptured;const pollGate=new Promise(r=>releasePoll=r),pollReady=new Promise(r=>pollCaptured=r);let held=false;
   await page.route('**/api/executions/*',async route=>{

@@ -141,15 +141,30 @@ public class SessionService {
         return s;
     }
     private void scheduleClose(Session s) {
-        if(!s.cleanupScheduled.compareAndSet(false,true))return;
-        try{cleanup.execute(()->{
-            try{close(s.id);}catch(AppException ex){ErrorMessages.diagnostic("session-close-failed",ex);}
-            finally{
-                s.cleanupScheduled.set(false);s.recoveryPending=false;
-                if(s.resourceReleased)synchronized(this){retired.put(s.id,s);while(retired.size()>16)retired.remove(retired.keySet().iterator().next());}
-                else retireIfClosed(s);
-            }
-        });}catch(RejectedExecutionException ex){s.cleanupScheduled.set(false);s.recoveryPending=false;}
+        if (!s.cleanupScheduled.compareAndSet(false, true)) return;
+        try {
+            cleanup.execute(() -> {
+                try {
+                    close(s.id);
+                } catch (AppException ex) {
+                    ErrorMessages.diagnostic("session-close-failed", ex);
+                } finally {
+                    s.cleanupScheduled.set(false);
+                    s.recoveryPending = false;
+                    if (s.resourceReleased) {
+                        synchronized (this) {
+                            retired.put(s.id, s);
+                            while (retired.size() > 16) retired.remove(retired.keySet().iterator().next());
+                        }
+                    } else {
+                        retireIfClosed(s);
+                    }
+                }
+            });
+        } catch (RejectedExecutionException ex) {
+            s.cleanupScheduled.set(false);
+            s.recoveryPending = false;
+        }
     }
     public void requestBreak(Session s) {
         s.closing=true;s.state="BROKEN";s.recoveryPending=true;
@@ -165,19 +180,36 @@ public class SessionService {
     private void abort(Session s) {
         try {
             s.connection.abort(Runnable::run);
-            s.closeConfirmed=s.connection.isClosed();
-        }catch(Throwable ex){
+            s.closeConfirmed = s.connection.isClosed();
+        } catch (Throwable ex) {
             // close/rollback must never race a still-running JDBC operation if abort is unsupported.
-            if(!s.busy.get())try{s.connection.close();s.closeConfirmed=s.connection.isClosed();}catch(SQLException ignored){}
-            ErrorMessages.diagnostic("session-abort-failed",ex);
-        }finally{s.disconnecting.set(false);s.recoveryPending=false;retireIfClosed(s);}
+            if (!s.busy.get()) {
+                try {
+                    s.connection.close();
+                    s.closeConfirmed = s.connection.isClosed();
+                } catch (SQLException ignored) { }
+            }
+            ErrorMessages.diagnostic("session-abort-failed", ex);
+        } finally {
+            s.disconnecting.set(false);
+            s.recoveryPending = false;
+            retireIfClosed(s);
+        }
     }
     @PreDestroy public void shutdown() {
-        stopAccepting();reaper.shutdownNow();
-        for(Session s:sessions.values())if(s.busy.get())requestBreak(s);else scheduleClose(s);
+        stopAccepting();
+        reaper.shutdownNow();
+        for (Session s : sessions.values()) {
+            if (s.busy.get()) requestBreak(s);
+            else scheduleClose(s);
+        }
         cleanup.shutdown();
-        try{if(!cleanup.awaitTermination(CLOSE_WAIT_SECONDS,TimeUnit.SECONDS))cleanup.shutdownNow();}
-        catch(InterruptedException ex){cleanup.shutdownNow();Thread.currentThread().interrupt();}
+        try {
+            if (!cleanup.awaitTermination(CLOSE_WAIT_SECONDS, TimeUnit.SECONDS)) cleanup.shutdownNow();
+        } catch (InterruptedException ex) {
+            cleanup.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
         // Unconfirmed/busy resources stay tracked. Driver leases must not be disposed beneath workers.
     }
     public static String safe(Throwable ex){return ErrorMessages.safe(ex);}

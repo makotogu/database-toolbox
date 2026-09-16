@@ -264,7 +264,7 @@ function renderConnectionTree(c) {
 function renderObjects(c, scope, key) {
   const data = state.tree.get(key);
   if (!data) return '<div class="skeleton">正在读取表与存过…</div>';
-  if (data.error) return `<div class="tree-error">${esc(data.error)}</div>`;
+  if (data.error) return `<div class="tree-error">${esc(data.error)}<br>${button("重试", "refresh-objects", null, "small", `data-id="${c.id}" data-key="${esc(key)}" data-catalog="${esc(scope.catalog || "")}" data-schema="${esc(scope.schema || "")}"`)}</div>`;
   let query = state.search.toLowerCase();
   const groups = [
     ["表与视图", "table", data.tables || [], data.tableError],
@@ -335,6 +335,16 @@ async function loadObjects(id, scope, key, refresh = false) {
   const current = request.current() && !!connection(id);
   finishRead(requestKey, request);
   if (!current) return;
+  const aborted = request.controller.signal.aborted || results.some(
+    (result) => result.status === "rejected" && result.reason?.name === "AbortError",
+  );
+  if (aborted) {
+    // A superseded request returned above; a current request was interrupted or timed out.
+    // Keep this distinct from a successful read with no objects, and allow an explicit retry.
+    state.tree.set(key, { error: "读取超时，请重试" });
+    renderTree();
+    return;
+  }
   const obj = {
     tables: results[0].status === "fulfilled" ? list(results[0].value) : [],
     routines: results[1].status === "fulfilled" ? list(results[1].value) : [],
@@ -1558,6 +1568,12 @@ const actions = {
     await loadTree(id, true);
   },
   "refresh-connection": (el) => loadTree(el.dataset.id, true),
+  "refresh-objects": (el) => loadObjects(
+    el.dataset.id,
+    { catalog: el.dataset.catalog, schema: el.dataset.schema },
+    el.dataset.key,
+    true,
+  ),
   "open-object": (el) =>
     openObject(el.dataset.id, JSON.parse(el.dataset.object)),
   "select-tab": (el) => {

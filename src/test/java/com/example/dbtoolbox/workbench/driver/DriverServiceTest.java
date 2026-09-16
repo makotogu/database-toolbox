@@ -70,6 +70,23 @@ class DriverServiceTest {
         drivers.delete(profile.id);
     }
 
+    @Test void catalogWritesRestoreOwnerOnlyPermissionsAndRejectSymlinkTargets() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(Files.getFileStore(temporary).supportsFileAttributeView("posix"));
+        DriverProfile profile = drivers.importFiles(new MultipartFile[]{h2()}, "catalog permissions", null);
+        Path catalog = paths.configDir().resolve("drivers-v2.json");
+        Files.setPosixFilePermissions(paths.configDir(), java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+        drivers.delete(profile.id);
+        assertEquals("rwx------", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(paths.configDir())));
+        assertEquals("rw-------", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(catalog)));
+        Path original = temporary.resolve("original-catalog.json");
+        Files.move(catalog, original);
+        byte[] before = Files.readAllBytes(original);
+        Files.createSymbolicLink(catalog, original);
+        assertThrows(AppException.class, () -> drivers.importFiles(new MultipartFile[]{h2()}, "symlink catalog", null));
+        assertTrue(Files.isSymbolicLink(catalog));
+        assertArrayEquals(before, Files.readAllBytes(original));
+    }
+
     @Test void badImportAndTraversalAreRejectedWithoutProfiles() throws Exception {
         assertThrows(AppException.class, () -> drivers.importFiles(new MultipartFile[]{new MockMultipartFile("files", "../evil.jar", "application/java-archive", new byte[]{1})}, null, null));
         assertThrows(AppException.class, () -> drivers.importFiles(new MultipartFile[]{new MockMultipartFile("files", "broken.jar", "application/java-archive", new byte[]{1})}, null, null));

@@ -30,6 +30,10 @@ public final class PrivateFiles {
         }
         AclFileAttributeView acl = Files.getFileAttributeView(path, AclFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
         if (acl == null) throw new IOException("文件系统不支持所有者专用权限");
+        protectAcl(acl, directory);
+    }
+
+    static void protectAcl(AclFileAttributeView acl, boolean directory) throws IOException {
         List<AclEntry> entries = ownerAcl(acl.getOwner(), directory);
         acl.setAcl(entries);
         if (!acl.getAcl().equals(entries)) throw new IOException("无法限制本地配置 ACL");
@@ -47,6 +51,8 @@ public final class PrivateFiles {
             return new FileAttribute<?>[]{PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString(directory ? "rwx------" : "rw-------"))};
         if (Files.getFileAttributeView(parent, AclFileAttributeView.class) == null)
             throw new IOException("文件系统不支持所有者专用权限");
+        // Bootstrap creation only. Re-read the new file's actual owner and verify its ACL before data.
+        // The parent's owner is not necessarily the creating account (e.g. a system-owned directory).
         final UserPrincipal owner = parent.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName(System.getProperty("user.name"));
         return new FileAttribute<?>[]{new FileAttribute<List<AclEntry>>() {
             public String name() { return "acl:acl"; }
@@ -59,6 +65,8 @@ public final class PrivateFiles {
         // CREATE_NEW and restrictive creation attributes avoid a permissive-file window.
         try (java.nio.channels.SeekableByteChannel out = Files.newByteChannel(path,
                 EnumSet.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE), attributes(path.getParent(), false))) {
+            // Fail before writing any secret bytes if the actual owner's ACL cannot be enforced.
+            protect(path, false);
             java.nio.ByteBuffer buffer = java.nio.ByteBuffer.wrap(bytes);
             while (buffer.hasRemaining()) out.write(buffer);
         }

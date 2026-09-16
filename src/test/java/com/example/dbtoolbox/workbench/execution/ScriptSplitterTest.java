@@ -59,6 +59,14 @@ class ScriptSplitterTest {
         assertEquals("BEGIN x:=q'[\n/\n]'; END;",ScriptSplitter.block("BEGIN x:=q'[\n/\n]'; END;\n/","ORACLE").sql);
         assertEquals("BEGIN x:=q'[\n/\n]'; END;",ScriptSplitter.block("BEGIN x:=q'[\n/\n]'; END;","ORACLE").sql);
     }
+    @Test void gaussQQuoteNeedsConfirmationUntilCompatibilityModeIsKnown() {
+        assertTrue(ScriptSplitter.requiresConfirmation("SELECT q'[plain text]'", "GAUSSDB", false));
+        assertTrue(ScriptSplitter.requiresConfirmation("SELECT q'[x' INTO copy FROM t --]'", "GAUSSDB", false));
+        assertFalse(ScriptSplitter.requiresConfirmation("SELECT $$ q'[plain text]' $$", "GAUSSDB", false));
+        assertFalse(ScriptSplitter.requiresConfirmation("SELECT 'q''[plain text]'", "GAUSSDB", false));
+        assertFalse(ScriptSplitter.requiresConfirmation("SELECT q'[plain text]' FROM dual", "ORACLE", false));
+        assertTrue(ScriptSplitter.requiresConfirmation("SELECT * FROM t FOR UPDATE", "GAUSSDB", false));
+    }
     @Test void sideEffectSelectsRequireConfirmationOutsideQuotedText() {
         for(String sql:new String[]{"SELECT 1 INTO OUTFILE '/tmp/fixture'", "SELECT 1 INTO DUMPFILE '/tmp/fixture'", "SELECT * INTO copy FROM t", "SELECT * FROM t FOR /* comment */ UPDATE", "SELECT * FROM t FOR NO KEY UPDATE", "SELECT * FROM t FOR KEY SHARE", "SELECT * FROM t LOCK IN SHARE MODE", "SELECT 1 /*! INTO OUTFILE '/tmp/fixture' */"})
             assertTrue(ScriptSplitter.requiresConfirmation(sql,"MYSQL",false),sql);

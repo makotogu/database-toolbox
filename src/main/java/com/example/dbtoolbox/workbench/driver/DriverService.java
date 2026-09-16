@@ -1,6 +1,7 @@
 package com.example.dbtoolbox.workbench.driver;
 
 import com.example.dbtoolbox.common.AppException;
+import com.example.dbtoolbox.common.PrivateFiles;
 import com.example.dbtoolbox.common.StoragePaths;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
@@ -479,13 +480,7 @@ public class DriverService {
 
     private void writeCatalog(DriverCatalog catalog) {
         try {
-            Files.createDirectories(catalogFile.getParent());
-            Path temporary = Files.createTempFile(catalogFile.getParent(), "drivers-v2-", ".tmp");
-            try {
-                mapper.writerWithDefaultPrettyPrinter().writeValue(temporary.toFile(), catalog);
-                try { Files.move(temporary, catalogFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
-                catch (AtomicMoveNotSupportedException ex) { Files.move(temporary, catalogFile, StandardCopyOption.REPLACE_EXISTING); }
-            } finally { Files.deleteIfExists(temporary); }
+            PrivateFiles.replace(catalogFile, mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(catalog));
         } catch (IOException ex) { throw new AppException("保存驱动配置失败: " + safeMessage(ex)); }
     }
 

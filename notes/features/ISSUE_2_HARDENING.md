@@ -15,7 +15,7 @@
 
 没有实施 JDBC URL 策略、非 Driver 类初始化/厂商 unwrap 限制、文件大小策略、CI、类型转换合并或大文件拆分。相关回归测试属于本批范围。没有新增运行时依赖、前端构建链或全 API 登录。
 
-## 验证环境与结果
+## 初次提交验证环境与结果（48a009e）
 
 仅使用临时工作台目录、合成凭据/SQL、内存 H2 和一次性数据库容器；没有读取真实连接数据。运行环境为 macOS 27.0（26A428）、Corretto `1.8.0_452`、Spring Boot `2.7.18` / Spring `5.3.31`、Node `22.15.1`、Playwright `1.62.1`、Chrome `152.0.7977.84`。
 
@@ -47,6 +47,26 @@ python3 scripts/smoke-cell-edit.py --base-url http://127.0.0.1:18090
 ```
 
 使用仓库外安装的 Playwright 与现有 Chrome，通过 `TOOLBOX_PLAYWRIGHT_PATH`、`TOOLBOX_CHROME_PATH` 和 `TOOLBOX_BASE_URL` 分别运行 `node scripts/smoke-hardening-ui.cjs` 与 `node scripts/smoke-cell-ui.cjs`。厂商脚本另传临时数据库 URL；凭据不要写入记录或真实配置。单 JAR 验证运行 `scripts/verify-release.py --jar target/database-toolbox.jar --java <JDK8-java> --port <空闲端口>`。
+
+## PR #3 评审跟进（2026-09-16）
+
+- **对象树超时：接受问题、校正症状。** 原实现已有 `tableError/routineError`，不一定显示空库，但超时保留的是原始浏览器错误且缺少就地重试。现在区分被新请求替代的 Abort 与当前读取超时：前者丢弃，后者进入“读取超时，请重试”状态。不能仅 return 导致一直显示加载中。真实浏览器拦住两类元数据请求，等待实际 15 秒截止时间，确认提示/按钮可见；解除拦截后点重试，真实 H2 表重新出现。另有过时代次、部分成功结果的逻辑回归。
+- **驱动配置权限：纳入本批。** `writeCatalog` 改用 `PrivateFiles.replace`，统一运行期目录/文件权限、临时文件和符号链接策略。新增用例先放宽临时配置目录，再触发驱动目录写入；旧实现保持 0755，新实现恢复 0700，目标文件为 0600。符号链接目标拒绝且原文件不改。没有据 `createTempFile` 就推断已实测新文件退回 0644。
+- **GaussDB q 引号：保守确认，不一概映射 PostgreSQL。** [华为兼容模式文档](https://support.huaweicloud.com/centralized-devg-v2-gaussdb/gaussdb_42_1217.html)区分 A、B、C、PG；产品名不足以确定实际语法。本批仅修改确认分类，遇代码区域 q 引号便要求确认，普通字符串/美元字符串内的 q 文本仍被屏蔽。保留原脚本和过程体分割路径；未宣称厂商实测。
+- **Windows ACL：补写入前检查，保留验收缺口。** 空文件创建后、写入字节前按实际文件 owner 设置并读取验证 ACL；增加模拟 owner 和额外 ACE 拒绝用例。没有直接改成父目录 owner，因为父目录可能归另一账户所有。初始主体查找仍依赖 `user.name`，失败则停止。依据 [Java 8 ACL 接口](https://docs.oracle.com/javase/8/docs/api/java/nio/file/attribute/AclFileAttributeView.html)及 [OpenJDK 8 Windows 实现](https://github.com/openjdk/jdk8u/blob/master/jdk/src/windows/classes/sun/nio/fs/WindowsAclFileAttributeView.java)，目前不声称支持跨平台禁止继承；读取时的 ACL 等值不保证后续继承变化不会传播。真实 Windows 域/服务账户和继承行为仍需验证。
+- **可读性：** 展开密文读取/写入/迁移、会话清理队列及 abort/退出中的多语句行，保留流程次序。未趁机拆分模块或变更会话协议。
+
+新增 Node 超时用例在旧实现失败（未进入明确超时状态）；新增 Java 权限、GaussDB 确认用例也先在旧实现失败，再验证修复。跟进版实际执行：
+
+| 验证 | 结果 |
+| --- | --- |
+| 同一 Corretto 8 下 `mvn -o -B -ntp clean verify` | **91 项通过**，0 失败/错误/跳过，含 2 项模拟 ACL 策略用例；不等于 Windows 实测 |
+| `node scripts/test-async-ui.cjs` | **9 项通过**，含超时重试、旧对象响应、部分读取失败 |
+| `scripts/smoke-hardening-ui.cjs` | **6 组通过**，包含真实 15 秒对象请求超时和重试恢复；截图检查通过，无页面/console 错误 |
+| 最终 JAR 的 `scripts/verify-release.py` | **8 项通过**，含空目录、内置驱动、查询、目录锁及重启持久化 |
+| JS/启动器语法、diff 和文档链接 | 通过 |
+
+本轮没有重新运行 MySQL/PostgreSQL 全矩阵及原单元格浏览器脚本；此前证据只用于未改变的对应路径。本轮不改变厂商 JDBC 调用或事务语义，H2 驱动目录写入和最终 JAR 已重新验证。CI、URL 风险策略、类初始化/unwrap、文件上限仍属于未批准的后续范围，不作为本次评审自动追加项。PR 继续保持草稿，未合并或发布。
 
 ## 兼容性与剩余边界
 

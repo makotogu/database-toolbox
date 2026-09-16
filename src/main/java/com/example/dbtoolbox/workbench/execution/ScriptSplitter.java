@@ -105,7 +105,7 @@ public final class ScriptSplitter {
     /** Preserve code tokens only; quoted text is a barrier, comments are whitespace. Not a SQL grammar. */
     private static String confirmationCode(String source,String dialect,boolean backslashes) {
         if(source==null)return null;
-        boolean mysql="MYSQL".equals(dialect),oracle="ORACLE".equals(dialect)||"GAUSSDB".equals(dialect);
+        boolean mysql="MYSQL".equals(dialect),oracle="ORACLE".equals(dialect);
         StringBuilder code=new StringBuilder();int i=0;
         while(i<source.length()) {
             char c=source.charAt(i),next=i+1<source.length()?source.charAt(i+1):0;
@@ -121,6 +121,9 @@ public final class ScriptSplitter {
                 }
                 if(depth!=0)return null;code.append(' ');continue;
             }
+            // GAUSSDB alone does not identify the database's SQL compatibility mode.
+            // Confirm ambiguous q-quote forms rather than assuming Oracle or PostgreSQL semantics.
+            if("GAUSSDB".equals(dialect)&&(c=='q'||c=='Q')&&next=='\'')return null;
             if(oracle&&(c=='q'||c=='Q')&&next=='\''&&i+2<source.length()) {
                 char open=source.charAt(i+2),end=open=='['?']':open=='('?')':open=='{'?'}':open=='<'?'>':open;
                 int finish=source.indexOf(""+end+'\'',i+3);if(finish<0)return null;

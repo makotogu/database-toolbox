@@ -8,7 +8,7 @@ function fixture() {
   const t = { id: "tab", connectionId: "A", execution: { id: "old", state: "RUNNING" }, session: { id: "session", state: "RUNNING" } };
   const ctx = {
     pollTimer: null, polling: false, readRequests: new Map(), state: { tabs: [t], tree: new Map(), expanded: new Set() },
-    activeStates: new Set(["RUNNING", "QUEUED", "CANCEL_REQUESTED"]), AbortController,
+    activeStates: new Set(["RUNNING", "QUEUED", "CANCEL_REQUESTED"]), AbortController, URLSearchParams,
     setTimeout: (fn, ms) => { const id = ++sequence; timers.set(id, { fn, ms }); return id; }, clearTimeout: (id) => timers.delete(id),
     api: (path, options = {}) => new Promise((resolve, reject) => requests.push({ path, options, resolve, reject })),
     tab: () => null, connection: () => ({}), list: (x) => x, syncSessionContext: () => {}, allResults: () => [],
@@ -46,6 +46,41 @@ async function tick() { await new Promise((resolve) => setImmediate(resolve)); }
     requests[0].resolve({ id: "old", state: "RUNNING" }); await p;
     assert.equal(t.execution.state, "CANCELED"); assert.equal(t.cancelInFlight, false);
     console.log("PASS old RUNNING response cannot overwrite cancellation");
+  }
+  {
+    const { ctx, requests, timers } = fixture();
+    const pending = ctx.loadObjects("A", { schema: "PUBLIC" }, "A::PUBLIC");
+    const deadline = [...timers.values()].find((timer) => timer.ms === 15000);
+    deadline.fn();
+    for (const request of requests) request.reject(Object.assign(new Error("browser abort"), { name: "AbortError" }));
+    await pending;
+    const result = ctx.state.tree.get("A::PUBLIC");
+    assert.equal(result.error, "读取超时，请重试");
+    assert.equal(result.tables, undefined); // A timed-out read is not an empty successful catalog.
+    const retry = ctx.loadObjects("A", { schema: "PUBLIC" }, "A::PUBLIC", true);
+    requests[2].resolve([{ name: "RECOVERED_TABLE" }]); requests[3].resolve([]); await retry;
+    assert.equal(ctx.state.tree.get("A::PUBLIC").tables[0].name, "RECOVERED_TABLE");
+    console.log("PASS object read timeout is explicit and a retry can recover");
+  }
+  {
+    const { ctx, requests } = fixture();
+    const first = ctx.loadObjects("A", { schema: "PUBLIC" }, "A::PUBLIC");
+    const next = ctx.loadObjects("A", { schema: "PUBLIC" }, "A::PUBLIC", true);
+    requests[2].resolve([{ name: "CURRENT" }]); requests[3].resolve([]); await next;
+    for (const request of requests.slice(0, 2)) request.reject(Object.assign(new Error("aborted old request"), { name: "AbortError" }));
+    await first;
+    assert.equal(ctx.state.tree.get("A::PUBLIC").tables[0].name, "CURRENT");
+    assert.equal(ctx.state.tree.get("A::PUBLIC").error, undefined);
+    console.log("PASS superseded object reads cannot replace current data with an abort error");
+  }
+  {
+    const { ctx, requests } = fixture();
+    const pending = ctx.loadObjects("A", { schema: "PUBLIC" }, "A::PUBLIC");
+    requests[0].resolve([{ name: "VISIBLE_TABLE" }]); requests[1].reject(new Error("routine metadata unavailable")); await pending;
+    const result = ctx.state.tree.get("A::PUBLIC");
+    assert.equal(result.tables[0].name, "VISIBLE_TABLE");
+    assert.equal(result.routineError, "routine metadata unavailable");
+    console.log("PASS partial metadata failure keeps the successful group and an explicit error");
   }
   {
     const { ctx, t, requests, runPoll } = fixture(); ctx.startPolling(); const p = runPoll();
