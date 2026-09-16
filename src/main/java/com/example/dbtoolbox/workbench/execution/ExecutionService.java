@@ -35,13 +35,16 @@ public class ExecutionService {
     private final ThreadPoolExecutor workers=new ThreadPoolExecutor(4,4,0L,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<Runnable>(16),factory("sql-worker"),new ThreadPoolExecutor.AbortPolicy());
     private final ScheduledExecutorService timers=Executors.newScheduledThreadPool(2,factory("sql-timeout"));
     private final ExecutorService cancels=Executors.newFixedThreadPool(2,factory("sql-cancel"));
-    private final ExecutorService disconnects=Executors.newFixedThreadPool(4,factory("sql-disconnect"));
+    public static final int CANCEL_GRACE_SECONDS=2;
+    public static final int SHUTDOWN_WAIT_SECONDS=5;
+    private volatile boolean stopping;
     public ExecutionService(SessionService sessions,ObjectMapper mapper) {
         this.sessions=sessions;this.mapper=mapper;
         timers.scheduleWithFixedDelay(this::prune,60,60,TimeUnit.SECONDS);
     }
     private static ThreadFactory factory(String name){return r->{Thread t=new Thread(r,name);t.setDaemon(true);return t;};}
     public Plan prepare(ExecutionRequest request) {
+        if(stopping)throw new AppException("工作台正在退出，不再接受执行");
         validate(request);
         Session session=sessions.acquire(request.sessionId);
         try {
@@ -93,7 +96,7 @@ public class ExecutionService {
                 units=Collections.singletonList(ScriptSplitter.block(explained,session.dialect));
             }
             plan.units=units;
-            for(ScriptSplitter.Unit unit:units)if(ScriptSplitter.requiresConfirmation(unit.sql))plan.confirmationRequired=true;
+            for(ScriptSplitter.Unit unit:units)if(ScriptSplitter.requiresConfirmation(unit.sql,session.dialect,backslashes))plan.confirmationRequired=true;
         }
         if(request.analyze)plan.confirmationRequired=true;
         plan.message=plan.confirmationRequired?"此操作可能修改数据或实际执行分析。请核对连接与下列执行内容；自动提交的已完成语句不会自动撤销。":"执行范围已准备";
@@ -116,6 +119,7 @@ public class ExecutionService {
         return false;
     }
     public synchronized ExecutionRecord submit(ExecutionRequest request) {
+        if(stopping)throw new AppException("工作台正在退出，不再接受执行");
         validate(request);prune();
         if(request.requestId!=null && request.requestId.length()>100)throw new AppException("请求 ID 过长");
         String key=request.sessionId+":"+request.requestId;
@@ -140,7 +144,7 @@ public class ExecutionService {
         int i=0;for(ScriptSplitter.Unit unit:plan.units) {UnitResult result=new UnitResult();result.index=++i;result.sql=unit.sql;result.startLine=unit.startLine;result.endLine=unit.endLine;record.statements.add(result);}
         executions.put(record.id,record);submittedFingerprints.put(record.id,fingerprint);
         try {
-            workers.execute(()->run(record,request,plan,session));
+            workers.execute(new ExecutionTask(record,request,plan,session));
             plans.remove(plan.confirmationToken);
             if(request.requestId!=null)requestIds.put(key,record.id);
             return record;
@@ -149,12 +153,23 @@ public class ExecutionService {
         }
     }
     private final Map<String,String> submittedFingerprints=new ConcurrentHashMap<String,String>();
+    private final class ExecutionTask implements Runnable {
+        final ExecutionRecord record;final ExecutionRequest request;final Plan plan;final Session session;
+        ExecutionTask(ExecutionRecord record,ExecutionRequest request,Plan plan,Session session){this.record=record;this.request=request;this.plan=plan;this.session=session;}
+        public void run(){if(stopping)cancelBeforeStart();else ExecutionService.this.run(record,request,plan,session);}
+        void cancelBeforeStart(){
+            for(UnitResult unit:record.statements)unit.state="SKIPPED";
+            record.cancelRequested=true;record.state="CANCELED";record.message="工作台退出，排队任务未执行";
+            sessions.releaseUnexecuted(session);record.finishedAt=System.currentTimeMillis();
+        }
+    }
     private void run(ExecutionRecord record,ExecutionRequest request,Plan plan,Session session) {
         record.state="RUNNING";record.startedAt=System.currentTimeMillis();
-        ScheduledFuture<?> deadline=timers.schedule(()->requestCancellation(record,session,true),request.timeoutSeconds,TimeUnit.SECONDS);
+        ScheduledFuture<?> deadline=null;
         ResultReader.Budget budget=new ResultReader.Budget();
         String terminalState=null;
         try {
+            deadline=timers.schedule(()->requestCancellation(record,session,true),request.timeoutSeconds,TimeUnit.SECONDS);
             for(UnitResult unit:record.statements) {
                 if(record.cancelRequested)break;
                 long started=System.currentTimeMillis();unit.state="RUNNING";unit.warnings.addAll(plan.warnings);
@@ -200,7 +215,7 @@ public class ExecutionService {
                 record.message=record.cancelRequested?"已停止后续执行；已提交操作不会撤销":"执行完成";
             }
         } finally {
-            deadline.cancel(false);record.activeStatement=null;
+            if(deadline!=null)deadline.cancel(false);record.activeStatement=null;
             for(UnitResult unit:record.statements)if("PENDING".equals(unit.state))unit.state="SKIPPED";
             record.elapsedMs=System.currentTimeMillis()-record.startedAt;sessions.release(session);record.state=terminalState==null?"OUTCOME_UNKNOWN":terminalState;record.finishedAt=System.currentTimeMillis();
         }
@@ -266,7 +281,7 @@ public class ExecutionService {
         r.cancelRequested=true;r.timeoutRequested|=timeout;r.state="CANCEL_REQUESTED";r.message=timeout?"执行超时，正在请求取消":"正在请求数据库取消执行";
         Statement statement=r.activeStatement;
         if(statement!=null)cancels.submit(()->{try{statement.cancel();}catch(SQLException ignored){}});
-        timers.schedule(()->{if(r.finishedAt==0&&r.cancelRequested){r.message="驱动尚未终止，正在关闭会话；数据库结果可能未知";disconnects.submit(()->sessions.breakSession(session));}},2,TimeUnit.SECONDS);
+        timers.schedule(()->{if(r.finishedAt==0&&r.cancelRequested){r.message="驱动尚未终止，正在关闭会话；数据库结果可能未知";sessions.requestBreak(session);}},CANCEL_GRACE_SECONDS,TimeUnit.SECONDS);
     }
     public void delete(String id){ExecutionRecord r=get(id);if(r.finishedAt==0)throw new AppException("请等待执行结束后清除结果");executions.remove(id);submittedFingerprints.remove(id);requestIds.values().removeIf(id::equals);}
     private void prune(){long now=System.currentTimeMillis();plans.values().removeIf(p->now-p.created>10*60*1000L);for(ExecutionRecord r:executions.values())if(r.finishedAt>0&&now-r.finishedAt>15*60*1000L){executions.remove(r.id);submittedFingerprints.remove(r.id);requestIds.values().removeIf(r.id::equals);}}
@@ -288,5 +303,24 @@ public class ExecutionService {
         if(r.parameters.size()>256)throw new AppException("调用参数不能超过 256 个");
     }
     private static SQLException findSql(Throwable ex){while(ex!=null){if(ex instanceof SQLException)return (SQLException)ex;ex=ex.getCause();}return null;}
-    @PreDestroy public void close(){workers.shutdownNow();timers.shutdownNow();cancels.shutdownNow();disconnects.shutdownNow();}
+    @PreDestroy public void close(){
+        List<Runnable> queued=new ArrayList<Runnable>();
+        synchronized(this){
+            if(stopping)return;
+            stopping=true;sessions.stopAccepting();workers.shutdown();workers.getQueue().drainTo(queued);
+        }
+        for(Runnable task:queued)((ExecutionTask)task).cancelBeforeStart();
+        for(ExecutionRecord record:executions.values())if(record.finishedAt==0)
+            try{requestCancellation(record,sessions.get(record.sessionId),false);}catch(AppException ignored){}
+        boolean terminated=false;
+        try{terminated=workers.awaitTermination(SHUTDOWN_WAIT_SECONDS,TimeUnit.SECONDS);}
+        catch(InterruptedException ex){Thread.currentThread().interrupt();}
+        if(!terminated){
+            workers.shutdownNow();
+            for(ExecutionRecord record:executions.values())if(record.finishedAt==0){
+                record.state="OUTCOME_UNKNOWN";record.message="应用退出时驱动仍未结束，请核实数据库结果";
+            }
+        }
+        timers.shutdownNow();cancels.shutdownNow();
+    }
 }

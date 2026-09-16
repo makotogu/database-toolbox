@@ -252,7 +252,7 @@ public class DriverService {
         DriverProfile profile = require(catalog, id);
         if (profile.bundled) throw new AppException("内置驱动随应用提供，无需删除；可以另行导入并选择其他版本");
         RuntimeDriver runtime = runtimes.get(id);
-        if (runtime != null && runtime.references > 0) throw new AppException("驱动仍有活动会话，请先断开连接");
+        if (runtime != null && (runtime.references > 0 || runtime.activeCalls.get()>0)) throw new AppException("驱动仍有活动会话，请先断开连接");
         if (referenced.test(id)) throw new AppException("已保存的连接仍引用此驱动，请先修改或删除连接配置");
         if (runtime != null) {
             runtime.dispose();
@@ -263,13 +263,18 @@ public class DriverService {
         removeDirectory(directory(id));
     }
 
+    private boolean stopping;
     @PreDestroy
     public synchronized void shutdown() {
-        for (RuntimeDriver runtime : runtimes.values()) runtime.dispose();
-        runtimes.clear();
+        stopping=true;
+        for (RuntimeDriver runtime : new ArrayList<RuntimeDriver>(runtimes.values())) disposeIfIdle(runtime);
+    }
+    private void disposeIfIdle(RuntimeDriver runtime) {
+        if(stopping && runtime.references==0 && runtime.activeCalls.get()==0 && runtimes.values().remove(runtime))runtime.dispose();
     }
 
     private RuntimeDriver runtime(String id) {
+        if(stopping)throw new AppException("工作台正在退出，不再加载驱动");
         RuntimeDriver runtime = runtimes.get(id);
         if (runtime == null) {
             runtime = load(get(id));
@@ -380,6 +385,7 @@ public class DriverService {
             }
             ClassLoader previous = Thread.currentThread().getContextClassLoader();
             boolean closingConnection = target == graph.physical && ("close".equals(name) || "abort".equals(name));
+            graph.runtime.activeCalls.incrementAndGet();
             try {
                 Thread.currentThread().setContextClassLoader(graph.runtime.loader);
                 Object[] args = arguments == null ? null : arguments.clone();
@@ -390,8 +396,10 @@ public class DriverService {
                     }
                 }
                 Object value = method.invoke(target, args);
-                if ("close".equals(name)) closed.set(true);
-                if (closingConnection || (target == graph.physical && "isClosed".equals(name) && Boolean.TRUE.equals(value))) graph.releaseOnce();
+                if (closingConnection) {
+                    if(graph.physical.isClosed()){closed.set(true);graph.releaseOnce();}
+                } else if ("close".equals(name)) closed.set(true);
+                if (target == graph.physical && "isClosed".equals(name) && Boolean.TRUE.equals(value)) graph.releaseOnce();
                 Object result = graph.child(value, target instanceof Statement ? proxy : ownerStatement);
                 // Standard unwrap stays inside the graph. Vendor concrete classes/interfaces remain supported.
                 if ("unwrap".equals(name) && arguments != null && !((Class<?>) arguments[0]).isInstance(result)) return value;
@@ -401,7 +409,10 @@ public class DriverService {
                     try { if (graph.physical.isClosed()) graph.releaseOnce(); } catch (SQLException ignored) { }
                 }
                 throw ex.getCause();
-            } finally { Thread.currentThread().setContextClassLoader(previous); }
+            } finally {
+                Thread.currentThread().setContextClassLoader(previous);
+                synchronized(DriverService.this){graph.runtime.activeCalls.decrementAndGet();disposeIfIdle(graph.runtime);}
+            }
         }
     }
 
@@ -436,7 +447,7 @@ public class DriverService {
         @Override public boolean markSupported() { try { return withLoader(loader, () -> in.markSupported()); } catch (IOException impossible) { throw new IllegalStateException(impossible); } }
     }
 
-    private synchronized void release(RuntimeDriver runtime) { runtime.references--; }
+    private synchronized void release(RuntimeDriver runtime) { runtime.references--;disposeIfIdle(runtime); }
 
     private void inspectJar(Path path, Set<String> candidates) throws IOException {
         try (JarFile jar = new JarFile(path.toFile())) {
@@ -517,7 +528,7 @@ public class DriverService {
     }
 
     private static boolean hasText(String value) { return value != null && !value.trim().isEmpty(); }
-    private static String safeMessage(Exception ex) { return ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage(); }
+    private static String safeMessage(Exception ex) { return com.example.dbtoolbox.common.ErrorMessages.safe(ex); }
 
     private static byte[] readLimited(InputStream input, int limit) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -551,6 +562,7 @@ public class DriverService {
         final IsolatedLoader loader;
         final Driver driver;
         int references;
+        final java.util.concurrent.atomic.AtomicInteger activeCalls=new java.util.concurrent.atomic.AtomicInteger();
         RuntimeDriver(IsolatedLoader loader, Driver driver) { this.loader = loader; this.driver = driver; }
         void dispose() { loader.dispose(); }
     }

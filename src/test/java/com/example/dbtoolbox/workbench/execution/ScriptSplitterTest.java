@@ -59,4 +59,14 @@ class ScriptSplitterTest {
         assertEquals("BEGIN x:=q'[\n/\n]'; END;",ScriptSplitter.block("BEGIN x:=q'[\n/\n]'; END;\n/","ORACLE").sql);
         assertEquals("BEGIN x:=q'[\n/\n]'; END;",ScriptSplitter.block("BEGIN x:=q'[\n/\n]'; END;","ORACLE").sql);
     }
+    @Test void sideEffectSelectsRequireConfirmationOutsideQuotedText() {
+        for(String sql:new String[]{"SELECT 1 INTO OUTFILE '/tmp/fixture'", "SELECT 1 INTO DUMPFILE '/tmp/fixture'", "SELECT * INTO copy FROM t", "SELECT * FROM t FOR /* comment */ UPDATE", "SELECT * FROM t FOR NO KEY UPDATE", "SELECT * FROM t FOR KEY SHARE", "SELECT * FROM t LOCK IN SHARE MODE", "SELECT 1 /*! INTO OUTFILE '/tmp/fixture' */"})
+            assertTrue(ScriptSplitter.requiresConfirmation(sql,"MYSQL",false),sql);
+        for(String sql:new String[]{"SELECT 'INTO OUTFILE'", "SELECT 1 /* FOR UPDATE */", "SELECT \"into\" FROM t", "SELECT 'it''s FOR UPDATE'", "SELECT $$ FOR UPDATE $$"})
+            assertFalse(ScriptSplitter.requiresConfirmation(sql,"POSTGRESQL",false),sql);
+        assertFalse(ScriptSplitter.requiresConfirmation("SELECT q'[INTO OUTFILE]' FROM dual","ORACLE",false));
+        assertTrue(ScriptSplitter.requiresConfirmation("SELECT 1--2 INTO OUTFILE '/tmp/fixture'","MYSQL",false));
+        assertTrue(ScriptSplitter.requiresConfirmation("SELECT 'unfinished","H2",false));
+    }
+
 }

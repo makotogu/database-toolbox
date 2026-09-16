@@ -92,11 +92,57 @@ public final class ScriptSplitter {
         if(!hasContent(source.substring(0,end)))throw new AppException("没有可执行的 SQL");
         return new Unit(source,0,end);
     }
-    public static boolean requiresConfirmation(String sql) {
-        String s=withoutLeadingComments(sql).trim().toLowerCase(Locale.ROOT);
-        if(s.startsWith("/*!"))return true;
+    public static boolean requiresConfirmation(String sql) { return requiresConfirmation(sql,"GENERIC",false); }
+    public static boolean requiresConfirmation(String sql,String dialect,boolean backslashes) {
+        String s=confirmationCode(sql,dialect,backslashes);
+        if(s==null)return true;
+        s=s.trim().toLowerCase(Locale.ROOT);
         if(s.matches("(?s)explain\\b.*"))return Pattern.compile("(?is)\\banaly[sz]e\\b").matcher(s).find() || !s.matches("(?s)explain\\s+(?:\\([^)]*\\)\\s*)?(?:format\\s*=\\s*\\w+\\s+)?select\\b.*");
-        return !s.matches("(?s)(select|show|describe|desc)\\b.*");
+        if(s.matches("(?s)select\\b.*"))
+            return Pattern.compile("(?is)\\binto\\b|\\bfor\\s+(?:(?:no\\s+key|key)\\s+)?(?:update|share)\\b|\\block\\s+in\\s+share\\s+mode\\b").matcher(s).find();
+        return !s.matches("(?s)(show|describe|desc)\\b.*");
+    }
+    /** Preserve code tokens only; quoted text is a barrier, comments are whitespace. Not a SQL grammar. */
+    private static String confirmationCode(String source,String dialect,boolean backslashes) {
+        if(source==null)return null;
+        boolean mysql="MYSQL".equals(dialect),oracle="ORACLE".equals(dialect)||"GAUSSDB".equals(dialect);
+        StringBuilder code=new StringBuilder();int i=0;
+        while(i<source.length()) {
+            char c=source.charAt(i),next=i+1<source.length()?source.charAt(i+1):0;
+            if((c=='-'&&next=='-'&&(!mysql||i+2==source.length()||Character.isWhitespace(source.charAt(i+2))))||(mysql&&c=='#')) {
+                int end=source.indexOf('\n',i);i=end<0?source.length():end;code.append(' ');continue;
+            }
+            if(c=='/'&&next=='*') {
+                if(i+2<source.length()&&(source.charAt(i+2)=='!' || source.startsWith("/*M!",i)))return null;
+                int depth=1;i+=2;
+                while(i<source.length()&&depth>0){
+                    if(source.startsWith("/*",i)&&!mysql){depth++;i+=2;}
+                    else if(source.startsWith("*/",i)){depth--;i+=2;}else i++;
+                }
+                if(depth!=0)return null;code.append(' ');continue;
+            }
+            if(oracle&&(c=='q'||c=='Q')&&next=='\''&&i+2<source.length()) {
+                char open=source.charAt(i+2),end=open=='['?']':open=='('?')':open=='{'?'}':open=='<'?'>':open;
+                int finish=source.indexOf(""+end+'\'',i+3);if(finish<0)return null;
+                i=finish+2;code.append(" ? ");continue;
+            }
+            if(!mysql&&c=='$'&&(i==0||!Character.isJavaIdentifierPart(source.charAt(i-1)))) {
+                Matcher m=DOLLAR.matcher(source);m.region(i,source.length());
+                if(m.lookingAt()) {String delimiter=m.group();int end=source.indexOf(delimiter,i+delimiter.length());if(end<0)return null;i=end+delimiter.length();code.append(" ? ");continue;}
+            }
+            if(c=='\''||c=='"'||c=='`') {
+                char quote=c;boolean escapes=backslashes||(!mysql&&c=='\''&&i>0&&(source.charAt(i-1)=='e'||source.charAt(i-1)=='E')&&(i<2||!Character.isJavaIdentifierPart(source.charAt(i-2))));
+                boolean ended=false;i++;
+                while(i<source.length()) {
+                    char ch=source.charAt(i++);
+                    if(ch=='\\'&&escapes){if(i<source.length())i++;continue;}
+                    if(ch==quote){if(i<source.length()&&source.charAt(i)==quote)i++;else{ended=true;break;}}
+                }
+                if(!ended)return null;code.append(" ? ");continue;
+            }
+            code.append(c);i++;
+        }
+        return code.toString();
     }
     private static void add(List<Unit> result,String source,int start,int end) { if(hasContent(source.substring(start,end))) result.add(new Unit(source,start,end)); }
     private static boolean hasContent(String s) {return !withoutLeadingComments(s).trim().isEmpty();}

@@ -2,6 +2,8 @@ package com.example.dbtoolbox.workbench;
 
 import com.example.dbtoolbox.common.ApiResponse;
 import com.example.dbtoolbox.common.StoragePaths;
+import com.example.dbtoolbox.common.PrivateFiles;
+import java.net.InetAddress;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 import org.springframework.context.event.EventListener;
@@ -41,7 +43,9 @@ public class LocalRuntime extends OncePerRequestFilter {
     @PostConstruct public synchronized void initialize() {
         if (lock != null && lock.isValid()) return;
         try {
-        Files.createDirectories(paths.root());
+        PrivateFiles.directory(paths.root());
+        secureExisting(paths.configDir());
+        secureExisting(paths.root().resolve("migration-backups"));
         lockChannel = FileChannel.open(paths.root().resolve(".workbench.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
         try { lock = lockChannel.tryLock(); } catch (RuntimeException ex) { lockChannel.close(); throw ex; }
         if (lock == null) { lockChannel.close(); throw new IllegalStateException("数据目录正由另一个工作台使用: " + paths.root()); }
@@ -66,9 +70,9 @@ public class LocalRuntime extends OncePerRequestFilter {
         res.setHeader("X-Content-Type-Options", "nosniff");
         res.setHeader("Referrer-Policy", "no-referrer");
         res.setHeader("X-Frame-Options", "DENY");
-        if (req.getRequestURI().startsWith("/api/")) {
+        {
             res.setHeader("Cache-Control", "no-store");
-            boolean valid = !"cross-site".equals(req.getHeader("Sec-Fetch-Site"));
+            boolean valid = isLoopback(req.getRemoteAddr()) && !"cross-site".equals(req.getHeader("Sec-Fetch-Site"));
             String origin = req.getHeader("Origin");
             if (origin != null) {
                 try {
@@ -87,6 +91,21 @@ public class LocalRuntime extends OncePerRequestFilter {
             }
         }
         chain.doFilter(req, res);
+    }
+    static boolean isLoopback(String address) {
+        if(address==null || !address.matches("[0-9a-fA-F:.]+"))return false;
+        try { return InetAddress.getByName(address).isLoopbackAddress(); }
+        catch(Exception ex) { return false; }
+    }
+    private static void secureExisting(java.nio.file.Path root) throws IOException {
+        if(!Files.exists(root, java.nio.file.LinkOption.NOFOLLOW_LINKS))return;
+        try(java.util.stream.Stream<java.nio.file.Path> paths=Files.walk(root)) {
+            java.util.Iterator<java.nio.file.Path> iterator=paths.iterator();
+            while(iterator.hasNext()) {
+                java.nio.file.Path path=iterator.next();
+                PrivateFiles.protect(path,Files.isDirectory(path,java.nio.file.LinkOption.NOFOLLOW_LINKS));
+            }
+        }
     }
     @RestController public static class BootstrapController {
         private final LocalRuntime runtime;

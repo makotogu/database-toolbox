@@ -113,7 +113,7 @@ ExecutionRecord
 
 ## API 速查
 
-统一响应为 `{success,message,data}`。先读取 `GET /api/bootstrap` 获取本次进程的 token；非 GET/HEAD 请求带 `X-Toolbox-Token`。`LocalRuntime` 同时检查本机 Host、Origin 和跨站请求，API 响应禁用缓存。
+统一响应为 `{success,message,data}`。先读取 `GET /api/bootstrap` 获取本次进程的 token；非 GET/HEAD 请求带 `X-Toolbox-Token`。`LocalRuntime` 对请求同时检查真实 remoteAddr、Host、Origin 和跨站请求，不用 X-Forwarded-For 替代来源校验；写请求需要 token。`LoopbackServer` 在创建监听 socket 前拒绝非 loopback 地址。响应禁用缓存。
 
 | 路径 | 方法与用途 |
 | --- | --- |
@@ -130,7 +130,8 @@ ExecutionRecord
 | `/api/connections/{id}/table-structure` | GET：catalog/schema/table 对应字段、索引、外键与警告 |
 | `/api/connections/{id}/routine-detail` | GET：catalog/schema/name/type/specificName 对应定义、参数、调用模板 |
 | `/api/sessions` | POST：按 connectionId、可选 catalog/schema 建立会话 |
-| `/api/sessions/{id}` | GET/DELETE：会话状态/关闭 |
+| `/api/sessions/{id}` | GET/DELETE：会话状态/关闭；删除已关闭或不存在的会话幂等 |
+| `/api/sessions/{id}/recover` | POST：请求回收失效会话；返回 resourceReleased/recoveryPending，不创建新连接 |
 | `/api/sessions/{id}/transaction` | POST：`action=COMMIT/ROLLBACK/AUTO_COMMIT`，后者带 autoCommit |
 | `/api/executions/prepare` | POST：解析单元、生成预览 SQL 和确认令牌 |
 | `/api/executions` | POST：异步提交；字段定义见 `ExecutionRequest` |
@@ -147,7 +148,9 @@ HTTP 请求成功不等于数据库执行成功。检查执行终态与每条语
 | 所在类 | 约束 |
 | --- | --- |
 | `DriverService` / multipart 配置 | 一次 1–32 包，单包 128 MiB、合计 256 MiB |
-| `SessionService` | 最多 8 会话；闲置约 30 分钟回收；扫描周期 60 秒 |
+| `SessionService` | 最多 8 个未释放资源的会话；最多 16 个已关闭状态记录；闲置约 30 分钟回收，扫描周期 60 秒 |
+| `SessionService` | 4 个清理线程、16 队列槽；退出时清理最多等待 3 秒 |
+| `ExecutionService` | 取消宽限 2 秒后请求 abort；退出时 worker 最多等待 5 秒 |
 | `ExecutionService` | 4 执行线程、16 队列槽；最多 16 条执行缓存；终态约 15 分钟过期 |
 | `ExecutionService` | 准备令牌最多 256 条，约 10 分钟有效；同会话执行互斥 |
 | `ExecutionRequest` | 默认 500 行、60 秒；可调至 5000 行、3600 秒；调用参数最多 256 个 |
@@ -160,6 +163,8 @@ HTTP 请求成功不等于数据库执行成功。检查执行终态与每条语
 ```text
 data/config/master.key
 data/config/connections-v2.enc
+data/config/connections-v2.enc.legacy-backup/connections-v2.enc
+data/config/connections-v2.enc.legacy-backup/master.key
 data/config/drivers-v2.json
 data/drivers/<id>/*.jar
 data/drivers/bundled-xxx/*.jar
@@ -169,13 +174,29 @@ data/migration-backups/legacy-v1/master.key
 
 首次读取连接时，若不存在 V2 配置而发现旧 `datasources.enc`，备份旧文件及密钥后迁移。保留原类型、URL、凭据和无法直接映射的历史字段；连接标记为待选驱动。损坏、重复标识或密钥异常停止迁移，不能覆盖旧文件。V1 源码、说明与旧业务在 `legacy/v1/`，不回迁到 V2 运行包。
 
+当前密文格式为 `DBTX` + 版本字节 `1` + 12 字节随机 IV + AES-GCM 密文/128 位认证标签，头部作为 AAD。明确识别的无头旧 ECB 文件仅用于读取与升级；GCM 认证失败不回退 ECB。先通过目录语义校验，再备份旧 V2 文件和密钥，原子替换为新格式。V1 迁移只升级新写入的 V2 文件，V1 原件与备份字节不变。已有备份内容不匹配时停止，不能覆盖备份。
+
+`PrivateFiles` 在创建时使用所有者专用属性，POSIX 目录 0700、文件 0600；已有配置目录、迁移备份在启动时收紧权限，符号链接拒绝。非 POSIX 使用 owner-only ACL；不支持等价权限时在写入秘密前失败。Windows ACL 分支需在真实 Windows 环境另行验证。升级后老版本不能直接读取新密文。
+
+退出次序：停止接收执行/会话 → 标记排队任务未执行并释放门闩 → 请求取消活动 Statement → 保留定时器完成 abort 升级并有界等待 worker → 有界关闭空闲会话。busy 会话只请求 abort，不并发 rollback/close；未确认结束保留 OUTCOME_UNKNOWN 和资源记录。驱动加载器只有在连接引用与正在运行的 JDBC 代理调用都归零时才能释放。进程内不能保证终止不遵守取消的厂商代码。
+
+关闭确认且 worker/disconnect 已退出的会话可转为最多 16 个状态记录，不再占 8 个 JDBC 名额。`resourceReleased` 只代表资源释放，不能用它推导事务提交/回滚结果。前端恢复必须确认建立新会话，不得重新提交旧 SQL。失败回收可重试，仍使用有界清理队列。
+
+通用 HTTP 异常返回固定文案与关联 UUID；日志只记录异常类别和应用代码位置，不记录 Throwable 原文、SQL、URL 或请求体。JDBC 错误仅返回 SQLState/错误码；数据库 warning/notice 保留脱敏文本，应用提示统一脱敏。
+
 ## 修改前端
 
 所有运行资源必须留在 `src/main/resources/static/` 并打入 JAR，不引用 CDN。继续使用原生模块、浏览器表单和现有 API 封装，不引入额外编译步骤。
 
 修改时保持：标签文本与选区独立、结果按列位置读取、数据库错误可定位、异步执行状态真实、关闭前处理事务、所有数据库文本正确转义。表单禁止默认导航提交，避免连接凭据进入 URL。可见改动需在真实浏览器检查空态、含数据状态、错误状态及目标尺寸。
 
+轮询有单一调度入口和互斥标记；每个只读请求有 AbortController、15 秒读取截止时间及所属执行/连接标识校验。取消写请求使旧 poll 失效，但不会中断或重发写请求。读失败保留活动状态并重试读取。连接上下文和对象树刷新同样拒绝过时代次。执行状态变化只重绘当前标签，保留编辑器节点、焦点、选区和导航树。
+
+`ScriptSplitter.requiresConfirmation` 使用词法屏蔽注释/引号文本后检查 SELECT INTO、行锁和共享锁；执行注释与未知顶层语句保守确认。它不做完整语法或函数副作用分析。
+
 ## 构建与验证
+
+异步前端逻辑回归：`node scripts/test-async-ui.cjs`。真实浏览器仍需检查取消、连接切换、恢复和编辑器焦点；Node 逻辑测试不能代替渲染验收。
 
 使用 JDK 8。macOS 可以先设置：
 
