@@ -33,11 +33,14 @@ public class ExecutionRecord {
         public List<Map<String,Object>> parameters = new ArrayList<Map<String,Object>>();
         public long updateCount;
         public boolean truncated;
-        public String message;
+        public String message, readOnlyReason;
+        public List<List<Integer>> truncatedCells = new ArrayList<List<Integer>>();
+        @JsonIgnore CellEdits.Snapshot editSnapshot;
     }
     public static class Column {
         public int index, jdbcType;
-        public String label, typeName;
+        public String label, typeName, readOnlyReason;
+        public boolean editable, nullable;
     }
     public static class ErrorInfo {
         public String message, sqlState;

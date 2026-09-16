@@ -19,6 +19,12 @@ public class ExecutionRequest {
     public int offset;
     public int limit = 200;
     public List<Map<String,Object>> filters = new ArrayList<Map<String,Object>>();
+    public CellChange cellChange;
+    public static class CellChange {
+        public String executionId, value;
+        public int result, row, column;
+        public boolean nullValue;
+    }
     public static class Parameter {
         public int position;
         public String name, typeName;

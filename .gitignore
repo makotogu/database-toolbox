@@ -14,3 +14,6 @@ notes/code-loop/
 *.pem
 *.key
 *.enc
+
+__pycache__/
+*.pyc

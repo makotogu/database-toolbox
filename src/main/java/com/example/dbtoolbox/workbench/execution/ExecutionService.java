@@ -18,6 +18,8 @@ import java.util.concurrent.*;
 public class ExecutionService {
     public static class Plan {
         public List<ScriptSplitter.Unit> units;
+        @com.fasterxml.jackson.annotation.JsonIgnore CellEdits.Edit cellEdit;
+        @com.fasterxml.jackson.annotation.JsonIgnore String previewCatalog, previewSchema;
         public boolean confirmationRequired;
         public String confirmationToken, message;
         public List<String> warnings=new ArrayList<String>();
@@ -53,8 +55,26 @@ public class ExecutionService {
     private Plan buildPlan(ExecutionRequest request,Session session) throws SQLException {
         Plan plan=new Plan();String mode=request.mode,sql=request.sql;
         if("TABLE_PREVIEW".equals(mode)) {
-            SqlDialect.PreviewQuery query=SqlDialect.previewSql(session.connection,session.dialect,request.catalog,request.schema,request.table,request.filters,request.orderBy,request.descending,request.offset,request.limit);
+            plan.previewCatalog=request.catalog;plan.previewSchema=request.schema;
+            String actualDialect=SqlDialect.detect(session.connection,null);
+            if(Arrays.asList("H2","POSTGRESQL","MYSQL").contains(actualDialect)) {
+                if(plan.previewCatalog==null||plan.previewCatalog.isEmpty())
+                    plan.previewCatalog="MYSQL".equals(actualDialect)&&request.schema!=null&&!request.schema.isEmpty()?request.schema:session.connection.getCatalog();
+                if("MYSQL".equals(actualDialect))plan.previewSchema=null;
+                else if(plan.previewSchema==null||plan.previewSchema.isEmpty())plan.previewSchema=session.connection.getSchema();
+            }
+            SqlDialect.PreviewQuery query=SqlDialect.previewSql(session.connection,session.dialect,plan.previewCatalog,plan.previewSchema,request.table,request.filters,request.orderBy,request.descending,request.offset,request.limit);
             plan.units=Collections.singletonList(ScriptSplitter.block(query.sql,session.dialect));plan.values=query.params;plan.warnings.addAll(query.warnings);
+        } else if("CELL_UPDATE".equals(mode)) {
+            ExecutionRequest.CellChange change=request.cellChange;
+            if(change==null || change.executionId==null)throw new AppException("请选择表预览中的单元格");
+            ExecutionRecord source=get(change.executionId);
+            if(!session.id.equals(source.sessionId)||!"TABLE_PREVIEW".equals(source.mode)||!"SUCCEEDED".equals(source.state)||source.finishedAt==0)
+                throw new AppException("只能编辑当前会话已完成的表预览");
+            List<Result> results=new ArrayList<Result>();for(UnitResult unit:source.statements)results.addAll(unit.results);
+            if(change.result<0||change.result>=results.size())throw new AppException("预览结果不存在");
+            plan.cellEdit=CellEdits.prepare(session,results.get(change.result),change);
+            plan.units=Collections.singletonList(ScriptSplitter.block(plan.cellEdit.sql,session.dialect));plan.confirmationRequired=true;
         } else if("BLOCK".equals(mode)||"CALL".equals(mode)) {
             plan.units=Collections.singletonList(ScriptSplitter.block(sql,session.dialect));
             plan.confirmationRequired=true;
@@ -133,11 +153,15 @@ public class ExecutionService {
         record.state="RUNNING";record.startedAt=System.currentTimeMillis();
         ScheduledFuture<?> deadline=timers.schedule(()->requestCancellation(record,session,true),request.timeoutSeconds,TimeUnit.SECONDS);
         ResultReader.Budget budget=new ResultReader.Budget();
+        String terminalState=null;
         try {
             for(UnitResult unit:record.statements) {
                 if(record.cancelRequested)break;
                 long started=System.currentTimeMillis();unit.state="RUNNING";unit.warnings.addAll(plan.warnings);
-                try(Statement statement=createStatement(session,request,unit.sql,plan)) {
+                try {
+                  if(plan.cellEdit!=null) {
+                    CellEdits.run(session,request,record,unit,plan.cellEdit);
+                  } else try(Statement statement=createStatement(session,request,unit.sql,plan)) {
                     record.activeStatement=statement;
                     if(record.cancelRequested) {unit.state="CANCELED";break;}
                     try{statement.setQueryTimeout(request.timeoutSeconds);}catch(SQLFeatureNotSupportedException ex){unit.warnings.add("驱动不支持语句超时，将使用会话截止时间");}
@@ -153,6 +177,8 @@ public class ExecutionService {
                     SQLWarning warning=session.connection.getWarnings();int warningCount=0;
                     while(warning!=null&&warningCount++<50){unit.warnings.add(SessionService.safe(warning));warning=warning.getNextWarning();}
                     session.connection.clearWarnings();
+                  }
+                    if("TABLE_PREVIEW".equals(request.mode))for(Result r:unit.results)if("RESULT_SET".equals(r.kind))CellEdits.attach(session,plan.previewCatalog,plan.previewSchema,request.table,r);
                     unit.state="SUCCEEDED";
                 } catch(Throwable ex) {
                     if(ex instanceof VirtualMachineError)throw (VirtualMachineError)ex;
@@ -161,22 +187,22 @@ public class ExecutionService {
                     unit.state="FAILED";
                     if(record.cancelRequested) {
                         boolean acknowledged=sq!=null&&(sq instanceof SQLTimeoutException || Arrays.asList("57014","HY008","70100").contains(sq.getSQLState()));
-                        record.state=acknowledged?(record.timeoutRequested?"TIMED_OUT":"CANCELED"):"OUTCOME_UNKNOWN";
+                        terminalState=acknowledged?(record.timeoutRequested?"TIMED_OUT":"CANCELED"):"OUTCOME_UNKNOWN";
                     }
-                    else if(sq!=null&&sq.getSQLState()!=null&&sq.getSQLState().startsWith("08")){record.state="OUTCOME_UNKNOWN";session.state="BROKEN";}
-                    else record.state="FAILED";
+                    else if(sq!=null&&sq.getSQLState()!=null&&sq.getSQLState().startsWith("08")){terminalState="OUTCOME_UNKNOWN";session.state="BROKEN";}
+                    else terminalState="FAILED";
                     record.message=record.cancelRequested?"执行已中断；是否已提交取决于数据库，必要时核实数据状态":unit.error.message;
                     break;
                 } finally {record.activeStatement=null;unit.elapsedMs=System.currentTimeMillis()-started;}
             }
-            if("RUNNING".equals(record.state)||"CANCEL_REQUESTED".equals(record.state)) {
-                record.state=record.cancelRequested?(record.timeoutRequested?"TIMED_OUT":"CANCELED"):"SUCCEEDED";
+            if(terminalState==null) {
+                terminalState=record.cancelRequested?(record.timeoutRequested?"TIMED_OUT":"CANCELED"):"SUCCEEDED";
                 record.message=record.cancelRequested?"已停止后续执行；已提交操作不会撤销":"执行完成";
             }
         } finally {
             deadline.cancel(false);record.activeStatement=null;
             for(UnitResult unit:record.statements)if("PENDING".equals(unit.state))unit.state="SKIPPED";
-            record.elapsedMs=System.currentTimeMillis()-record.startedAt;record.finishedAt=System.currentTimeMillis();sessions.release(session);
+            record.elapsedMs=System.currentTimeMillis()-record.startedAt;sessions.release(session);record.state=terminalState==null?"OUTCOME_UNKNOWN":terminalState;record.finishedAt=System.currentTimeMillis();
         }
     }
     private Statement createStatement(Session session,ExecutionRequest request,String sql,Plan plan) throws SQLException {
@@ -254,8 +280,8 @@ public class ExecutionService {
     private void validate(ExecutionRequest r) {
         if(r.sessionId==null||r.sessionId.trim().isEmpty())throw new AppException("请选择数据库会话");
         if(r.mode==null)r.mode="SQL";r.mode=r.mode.toUpperCase(Locale.ROOT);
-        if(!Arrays.asList("SQL","CURRENT","BLOCK","SCRIPT","CALL","EXPLAIN","TABLE_PREVIEW").contains(r.mode))throw new AppException("执行模式不支持");
-        if(!"TABLE_PREVIEW".equals(r.mode)&&(r.sql==null||r.sql.trim().isEmpty()))throw new AppException("SQL 不能为空");
+        if(!Arrays.asList("SQL","CURRENT","BLOCK","SCRIPT","CALL","EXPLAIN","TABLE_PREVIEW","CELL_UPDATE").contains(r.mode))throw new AppException("执行模式不支持");
+        if(!"TABLE_PREVIEW".equals(r.mode)&&!"CELL_UPDATE".equals(r.mode)&&(r.sql==null||r.sql.trim().isEmpty()))throw new AppException("SQL 不能为空");
         if(r.maxRows<1||r.maxRows>5000)throw new AppException("结果行数必须在 1 到 5000 之间");
         if(r.timeoutSeconds<1||r.timeoutSeconds>3600)throw new AppException("超时必须在 1 到 3600 秒之间");
         if(r.parameters==null)r.parameters=new ArrayList<ExecutionRequest.Parameter>();
