@@ -35,11 +35,14 @@ public final class ResultReader {
         for(int i=1;i<=md.getColumnCount();i++) {
             Column c=new Column();c.index=i;c.label=md.getColumnLabel(i);c.jdbcType=md.getColumnType(i);c.typeName=md.getColumnTypeName(i);result.columns.add(c);
         }
+        Result cell = new Result();
         while(rs.next()) {
             if(result.rows.size()>=maxRows || budget.exhausted() || budget.items>=100) {result.truncated=true;break;}
             List<Object> row=new ArrayList<Object>();
             for(Column c:result.columns) {
-                Object value=value(rs,c.index,c.jdbcType,result);
+                cell.truncated=false;
+                Object value=value(rs,c.index,c.jdbcType,cell);
+                if(cell.truncated){result.truncated=true;result.truncatedCells.add(Arrays.asList(result.rows.size(),c.index-1));}
                 row.add(value);budget.bytes+=value==null?4:String.valueOf(value).length()*2L;
                 if(budget.bytes>16*1024*1024) {result.truncated=true;break;}
             }

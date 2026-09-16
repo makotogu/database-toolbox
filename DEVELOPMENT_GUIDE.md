@@ -202,3 +202,14 @@ java -jar database-toolbox.jar --server.port=18080
 需要真实数据库验证时，可在一次性 MySQL/PostgreSQL 环境运行 `scripts/smoke-v2.py`；参数说明通过 `python3 scripts/smoke-v2.py --help` 查看。该脚本会创建并清理测试对象、连接和会话，导入的驱动留给 UI 验证；密码可通过 `TOOLBOX_MYSQL_PASSWORD` / `TOOLBOX_POSTGRES_PASSWORD` 提供。不要在生产库执行该脚本。
 
 验证应覆盖内置驱动首次安装、缺失/损坏恢复、内置配置保护、外部驱动导入与隔离、重启后保留、查询、同名列/NULL、元数据、存过、脚本边界、计划、事务、取消与独立 JAR 启动。运行过哪些具体组合，以 [DELIVERY.md](notes/reconstruction/DELIVERY.md) 为准；本指南不代表 Oracle、GaussDB 或 Windows 已完成环境验收。
+
+
+## 单元格修改协议
+
+`CELL_UPDATE` 复用 `/api/executions/prepare` → `/api/executions`，仍需令牌与唯一 requestId。请求 `cellChange` 包含 `{executionId, result, row, column, value, nullValue}`，下标从 0 开始，result 按 statements/results 展开。value 是字符串；NULL 必须显式指定。客户端不提供表名、主键值或原值。
+
+`ResultReader` 记录 `truncatedCells` 的 `[row, column]`；行数截断不会禁止其他完整单元格编辑。表预览结果公开列的 `editable/nullable/readOnlyReason` 和结果级 `readOnlyReason`，隐藏 `CellEdits.Snapshot`。服务端校验预览所属会话、版本、成功终态、行列、主键和类型，从缓存取原值与完整主键。执行后旧快照失效，必须刷新。
+
+`CellEdits` 仅为 H2、PostgreSQL、MySQL InnoDB 开启写回。根据 JDBC 元数据引用标识符并绑定值；执行前复核表结构。自动提交时使用短事务，手动事务使用保存点。`SELECT … FOR UPDATE` 后按类型精确比较所选格原值，避免文本排序规则导致误判；UPDATE 必须影响一行。重新读取验证输入未被静默舍入/转换，数据库警告或触发器改写输入值也回滚本次保存。不会检查其他列是否改变，不保证检测删除后以相同主键/原值重建的记录。
+
+回滚失败时禁止通过恢复 autoCommit 隐式提交，关闭失效会话。厂商/驱动未经验证或元数据不足时保持只读，不能为了开放编辑绕过主键、事务或保存点检查。新增能力需补充 `CellEditingTest`、一次性厂商数据库检查和浏览器验证。

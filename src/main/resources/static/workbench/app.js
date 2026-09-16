@@ -82,6 +82,7 @@ const state = {
   sidebarOpen: false,
 };
 let pollTimer;
+let cellEditor;
 const tab = () => state.tabs.find((t) => t.id === state.activeTab);
 const connection = (id) => state.connections.find((c) => c.id === id);
 const busy = (t) => !!t?.submitting || activeStates.has(t?.execution?.state);
@@ -355,7 +356,10 @@ function renderTab(t) {
 }
 function editorToolbar(t) {
   const disabled = busy(t) ? "disabled" : "";
-  return `<div class="toolbar">${button('执行当前 <kbd class="shortcut-key">⌘ ↵</kbd>', "execute-current", "play", "primary", disabled)}${button("选区", "execute-selection", null, "", disabled)}${button("整块", "execute-block", null, "", disabled)}${button("脚本", "execute-script", null, "", disabled)}<span class="divider"></span>${button("EXPLAIN", "explain", "branch", "", disabled)}${button("实际分析", "analyze", null, "", disabled + ' title="EXPLAIN ANALYZE 会真正执行语句"')}${button("取消", "cancel", "stop", "ghost", activeStates.has(t.execution?.state) ? "" : "disabled")}<span class="spacer"></span><label class="check-label transaction-label"><input id="auto-commit" type="checkbox" ${t.session?.autoCommit !== false ? "checked" : ""} ${busy(t) ? "disabled" : ""}>自动提交</label>${button("提交", "commit", "check", "ghost", !t.session || t.session.autoCommit || busy(t) ? "disabled" : "")}${button("回滚", "rollback", "undo", "ghost", !t.session || t.session.autoCommit || busy(t) ? "disabled" : "")}<span class="divider"></span>${button("", "open-sql", "open", "ghost icon-btn", 'title="打开 SQL 文件" aria-label="打开 SQL 文件"')}${button("", "save-sql", "save", "ghost icon-btn", 'title="保存 SQL 文件" aria-label="保存 SQL 文件"')}</div>`;
+  return `<div class="toolbar">${button('执行当前 <kbd class="shortcut-key">⌘ ↵</kbd>', "execute-current", "play", "primary", disabled)}${button("选区", "execute-selection", null, "", disabled)}${button("整块", "execute-block", null, "", disabled)}${button("脚本", "execute-script", null, "", disabled)}<span class="divider"></span>${button("EXPLAIN", "explain", "branch", "", disabled)}${button("实际分析", "analyze", null, "", disabled + ' title="EXPLAIN ANALYZE 会真正执行语句"')}${button("取消", "cancel", "stop", "ghost", activeStates.has(t.execution?.state) ? "" : "disabled")}<span class="spacer"></span>${transactionControls(t)}<span class="divider"></span>${button("", "open-sql", "open", "ghost icon-btn", 'title="打开 SQL 文件" aria-label="打开 SQL 文件"')}${button("", "save-sql", "save", "ghost icon-btn", 'title="保存 SQL 文件" aria-label="保存 SQL 文件"')}</div>`;
+}
+function transactionControls(t) {
+  return `<label class="check-label transaction-label"><input id="auto-commit" type="checkbox" ${t.session?.autoCommit !== false ? "checked" : ""} ${busy(t) ? "disabled" : ""}>自动提交</label>${button("提交", "commit", "check", "ghost", !t.session || t.session.autoCommit || busy(t) ? "disabled" : "")}${button("回滚", "rollback", "undo", "ghost", !t.session || t.session.autoCommit || busy(t) ? "disabled" : "")}`;
 }
 function editorMarkup(t) {
   return `<section class="editor-pane" aria-label="SQL 编辑器"><div class="editor"><div id="line-numbers" class="line-numbers" aria-hidden="true">${lineNumbers(t.sql)}</div><textarea id="sql-editor" class="sql-editor" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="SQL 编辑区" placeholder="-- 在这里编写 SQL\n-- ⌘ / Ctrl + Enter 执行当前语句\n-- 选择一段 SQL 执行选区，或完整执行数据库代码块"></textarea></div><div class="editor-footer"><span id="cursor-position">行 1，列 1</span><span class="spacer"></span><span>${t.type === "routine" ? "JDBC 调用与原生 SQL" : "SQL"}</span><span>UTF-8</span><span>拖动右下角调整高度</span></div></section>`;
@@ -370,7 +374,7 @@ function tableToolbar(t) {
   const cols = (t.structure?.columns || []).map((c) => ({
     name: c.name || c.columnName || c.COLUMN_NAME,
   }));
-  return `<div class="object-toolbar"><h2>${icon("table")}${esc(t.name)}<span class="object-type">${esc(t.object.type || "TABLE")}</span></h2>${button("数据", "table-data", null, t.tableView !== "structure" ? "selected" : "")}${button("结构", "table-structure", null, t.tableView === "structure" ? "selected" : "")}<span class="spacer"></span>${button("SQL 模板", "table-to-sql", "code", "small")}</div><div class="object-toolbar"><select id="filter-column" aria-label="过滤列">${options(cols, t.filterColumn || "", "选择过滤列")}</select><select id="filter-operator" aria-label="过滤操作"><option value="=">等于</option><option value="<>">不等于</option><option value="LIKE">LIKE</option><option value=">">大于</option><option value="<">小于</option><option value="IS NULL">IS NULL</option><option value="IS NOT NULL">IS NOT NULL</option></select><input id="filter-value" value="${esc(t.filterValue || "")}" placeholder="过滤值（参数绑定）" aria-label="过滤值"><select id="order-column" aria-label="排序列">${options(cols, t.orderBy || "", "默认排序")}</select><label class="check-label"><input id="order-desc" type="checkbox" ${t.descending ? "checked" : ""}>降序</label>${button("读取数据", "table-read", "refresh", "primary small", busy(t) ? "disabled" : "")}${button("取消", "cancel", "stop", "ghost small", activeStates.has(t.execution?.state) ? "" : "disabled")}</div>`;
+  return `<div class="object-toolbar"><h2>${icon("table")}${esc(t.name)}<span class="object-type">${esc(t.object.type || "TABLE")}</span></h2>${button("数据", "table-data", null, t.tableView !== "structure" ? "selected" : "")}${button("结构", "table-structure", null, t.tableView === "structure" ? "selected" : "")}<span class="spacer"></span>${transactionControls(t)}<span class="divider"></span>${button("SQL 模板", "table-to-sql", "code", "small")}</div><div class="object-toolbar"><select id="filter-column" aria-label="过滤列">${options(cols, t.filterColumn || "", "选择过滤列")}</select><select id="filter-operator" aria-label="过滤操作"><option value="=">等于</option><option value="<>">不等于</option><option value="LIKE">LIKE</option><option value=">">大于</option><option value="<">小于</option><option value="IS NULL">IS NULL</option><option value="IS NOT NULL">IS NOT NULL</option></select><input id="filter-value" value="${esc(t.filterValue || "")}" placeholder="过滤值（参数绑定）" aria-label="过滤值"><select id="order-column" aria-label="排序列">${options(cols, t.orderBy || "", "默认排序")}</select><label class="check-label"><input id="order-desc" type="checkbox" ${t.descending ? "checked" : ""}>降序</label>${button("读取数据", "table-read", "refresh", "primary small", busy(t) ? "disabled" : "")}${button("取消", "cancel", "stop", "ghost small", activeStates.has(t.execution?.state) ? "" : "disabled")}</div>`;
 }
 function routinePanel(t) {
   if (t.loading)
@@ -454,7 +458,7 @@ function dataTable(columns, rows, key = "result") {
         `<tr><td class="row-number">${ri + 1}</td>${columns
           .map((c, ci) => {
             const v = row[ci];
-            return `<td tabindex="0" data-cell="true" data-result="${key}" data-row="${ri}" data-column="${ci}" class="${v === null || v === undefined ? "null" : v === "" ? "empty-string" : ""}" title="双击或按 Enter 查看完整值">${v == null ? "NULL" : v === "" ? "(空字符串)" : esc(formatValue(v))}</td>`;
+            return `<td tabindex="0" data-cell="true" data-result="${key}" data-row="${ri}" data-column="${ci}" class="${v === null || v === undefined ? "null" : v === "" ? "empty-string" : ""}" title="双击或按 Enter 查看 / 编辑单元格">${v == null ? "NULL" : v === "" ? "(空字符串)" : esc(formatValue(v))}</td>`;
           })
           .join("")}</tr>`,
     )
@@ -463,7 +467,7 @@ function dataTable(columns, rows, key = "result") {
     )}${!rows.length ? `<tr><td colspan="${columns.length + 1}" class="muted" style="text-align:center;padding:24px">查询成功，返回 0 行</td></tr>` : ""}</tbody></table></div>`;
 }
 function tableFooter(t, r) {
-  return `<div class="table-footer"><span>${r.rows?.length || 0} 行 · ${r.columns?.length || 0} 列</span>${r.truncated ? '<span class="warning">结果已截断，达到资源上限</span>' : ""}<span class="muted">双击单元格查看 / 复制</span><span class="spacer"></span>${t.type === "table" ? `${button("上一页", "table-prev", null, "small", (t.offset || 0) === 0 || busy(t) ? "disabled" : "")}<span>第 ${Math.floor((t.offset || 0) / 200) + 1} 页</span>${button("下一页", "table-next", null, "small", (r.rows?.length || 0) < 200 || busy(t) || r.paginationSupported === false || !["MYSQL", "POSTGRESQL", "GAUSSDB", "H2"].includes(t.session?.dialect) ? "disabled" : "")}` : button("复制表格", "copy-results", "copy", "ghost small")}</div>${t.type === "table" ? '<div class="table-footer">分页会重新查询；并发修改及无唯一排序时，页面之间可能出现重复或遗漏。</div>' : ""}`;
+  return `<div class="table-footer"><span>${r.rows?.length || 0} 行 · ${r.columns?.length || 0} 列</span>${r.truncated ? '<span class="warning">结果已截断，达到资源上限</span>' : ""}<span class="muted">单击选中 · 双击 / Enter 查看或编辑</span>${t.type === "table" ? button("编辑选中格", "edit-selected-cell", "save", "small", "disabled") : ""}<span class="spacer"></span>${t.type === "table" ? `${button("上一页", "table-prev", null, "small", (t.offset || 0) === 0 || busy(t) ? "disabled" : "")}<span>第 ${Math.floor((t.offset || 0) / 200) + 1} 页</span>${button("下一页", "table-next", null, "small", (r.rows?.length || 0) < 200 || busy(t) || r.paginationSupported === false || !["MYSQL", "POSTGRESQL", "GAUSSDB", "H2"].includes(t.session?.dialect) ? "disabled" : "")}` : button("复制表格", "copy-results", "copy", "ghost small")}</div>${t.type === "table" ? `<div class="table-footer">${esc(r.readOnlyReason || "支持编辑非主键普通字段；保存前核对原值。分页会重新查询，并发修改时可能出现重复或遗漏。")}</div>` : ""}`;
 }
 function formatValue(value) {
   if (typeof value === "object") return JSON.stringify(value, null, 2);
@@ -660,6 +664,7 @@ async function execute(mode, extra = {}) {
   }
   if (mode !== "TABLE_PREVIEW" && !request.sql.trim())
     throw new Error("请先输入 SQL。");
+  t.selectedCell = null;
   t.localError = null;
   t.submitting = true;
   render();
@@ -737,7 +742,8 @@ function startPolling() {
 async function pollExecutions() {
   pollTimer = null;
   const pending = state.tabs.filter(
-    (t) => t.execution?.id && activeStates.has(t.execution.state),
+    (t) =>
+      !t.cellSaving && t.execution?.id && activeStates.has(t.execution.state),
   );
   await Promise.all(
     pending.map(async (t) => {
@@ -802,6 +808,8 @@ async function transaction(action, autoCommit) {
           ? "已启用自动提交"
           : "已切换为手动提交",
   );
+  if (t.type === "table" && t.tableView === "data")
+    await readTable(t, t.offset);
 }
 async function driversDialog() {
   state.drivers = list(await api("/drivers"));
@@ -864,7 +872,14 @@ async function connectionDialog(id) {
   }
   showDialog(
     id ? "编辑数据库连接" : "新建数据库连接",
-    `<p class="form-note">连接信息仅保存在本机。选择驱动可填入 URL 模板；网络数据库请替换地址和库名。H2 内存库可直接试用，应用退出后数据清空。</p><form id="connection-form"><input name="id" type="hidden" value="${esc(c.id || "")}"><div class="form-grid">${field("连接名称", "name", c.name || "")}<div class="form-field"><label for="f-driverId">JDBC 驱动</label><select id="f-driverId" name="driverId" required>${options(state.drivers.map((p) => ({ ...p, name: `${p.name}${p.version ? ` ${p.version}` : ""}${p.bundled ? " · 内置" : ""}` })), c.driverId || "", "选择 JDBC 驱动")}</select></div>${field("完整 JDBC URL", "jdbcUrl", c.jdbcUrl || "", "text", "切换驱动会保留已填写的 URL，请确认它与所选驱动一致。", true)}${field("用户名", "username", c.username || "")}${field("密码", "password", "", "password", id ? "留空保留已保存密码" : "密码加密保存在本机")}<div class="form-field"><label for="f-dialectHint">SQL 方言</label><select id="f-dialectHint" name="dialectHint">${[
+    `<p class="form-note">连接信息仅保存在本机。选择驱动可填入 URL 模板；网络数据库请替换地址和库名。H2 内存库可直接试用，应用退出后数据清空。</p><form id="connection-form"><input name="id" type="hidden" value="${esc(c.id || "")}"><div class="form-grid">${field("连接名称", "name", c.name || "")}<div class="form-field"><label for="f-driverId">JDBC 驱动</label><select id="f-driverId" name="driverId" required>${options(
+      state.drivers.map((p) => ({
+        ...p,
+        name: `${p.name}${p.version ? ` ${p.version}` : ""}${p.bundled ? " · 内置" : ""}`,
+      })),
+      c.driverId || "",
+      "选择 JDBC 驱动",
+    )}</select></div>${field("完整 JDBC URL", "jdbcUrl", c.jdbcUrl || "", "text", "切换驱动会保留已填写的 URL，请确认它与所选驱动一致。", true)}${field("用户名", "username", c.username || "")}${field("密码", "password", "", "password", id ? "留空保留已保存密码" : "密码加密保存在本机")}<div class="form-field"><label for="f-dialectHint">SQL 方言</label><select id="f-dialectHint" name="dialectHint">${[
       { id: "AUTO", name: "自动识别" },
       { id: "GENERIC", name: "通用 JDBC" },
       { id: "MYSQL", name: "MySQL" },
@@ -886,7 +901,9 @@ async function connectionDialog(id) {
 function fillDriverDefaults() {
   const form = $("#connection-form");
   if (!form || $("[name=id]", form).value) return;
-  const profile = state.drivers.find((p) => p.id === $("#f-driverId", form).value);
+  const profile = state.drivers.find(
+    (p) => p.id === $("#f-driverId", form).value,
+  );
   if (!profile) return;
   const url = $("#f-jdbcUrl", form),
     username = $("#f-username", form);
@@ -1143,6 +1160,10 @@ function cellDetail(cell) {
     ri = Number(cell.dataset.row),
     ci = Number(cell.dataset.column);
   let value, label;
+  if (/^\d+$/.test(key)) {
+    selectCell(cell);
+    if (t.type === "table") return editCellDialog(t, Number(key), ri, ci);
+  }
   if (key.startsWith("structure-")) {
     const items = t.structure[key.slice(10)] || [],
       keys = [...new Set(items.flatMap((x) => Object.keys(x)))];
@@ -1164,7 +1185,194 @@ function cellDetail(cell) {
     `${button("关闭", "dialog-close", null)}${button("复制内容", "copy-cell", "copy", "primary")}`,
   );
 }
+function cellReadOnly(t, result, row, column) {
+  const c = result?.columns?.[column];
+  if (busy(t)) return "请等待当前执行结束";
+  if (t.execution?.mode !== "TABLE_PREVIEW")
+    return "普通 SQL 查询结果只读；请打开表内容预览";
+  if (result?.truncatedCells?.some(([r, c]) => r === row && c === column))
+    return "单元格内容已截断，不能编辑";
+  return (
+    result?.readOnlyReason ||
+    c?.readOnlyReason ||
+    (!c?.editable ? "此单元格只读" : "")
+  );
+}
+function selectCell(cell) {
+  const t = tab();
+  if (!t) return;
+  $$("[data-cell].selected-cell").forEach((el) => {
+    el.classList.remove("selected-cell");
+    el.removeAttribute("aria-selected");
+  });
+  cell.classList.add("selected-cell");
+  cell.setAttribute("aria-selected", "true");
+  t.selectedCell = {
+    result: cell.dataset.result,
+    row: Number(cell.dataset.row),
+    column: Number(cell.dataset.column),
+    executionId: t.execution?.id,
+  };
+  const btn = $('[data-action="edit-selected-cell"]');
+  if (btn) {
+    const selected = t.selectedCell;
+    const reason = cellReadOnly(
+      t,
+      allResults(t)[Number(selected.result)],
+      selected.row,
+      selected.column,
+    );
+    btn.disabled = !!reason;
+    btn.title = reason || "编辑选中的单元格";
+  }
+}
+function editCellDialog(t, resultIndex, row, column) {
+  const result = allResults(t)[resultIndex],
+    c = result?.columns?.[column];
+  if (!c || !result.rows?.[row]) return;
+  const value = result.rows[row][column],
+    reason = cellReadOnly(t, result, row, column);
+  cellEditor = {
+    tabId: t.id,
+    executionId: t.execution.id,
+    result: resultIndex,
+    row,
+    column,
+    submitted: false,
+  };
+  showDialog(
+    `${c.label} · 第 ${row + 1} 行`,
+    `<p class="form-note">${esc(connection(t.connectionId)?.name)} / ${esc(t.object.name)} · ${esc(c.typeName)}</p><label class="cell-label">原值</label><pre class="cell-value cell-original" id="cell-value">${esc(value == null ? "NULL" : value === "" ? "" : formatValue(value))}</pre>${reason ? `<p class="form-note">${esc(reason)}</p>` : `<div class="form-field"><label for="cell-input">新值</label><textarea id="cell-input" rows="5" maxlength="32768" spellcheck="false" ${value == null ? "disabled" : ""}>${esc(value == null ? "" : formatValue(value))}</textarea><label class="cell-null"><input type="checkbox" id="cell-null" ${value == null ? "checked" : ""} ${c.nullable ? "" : "disabled"}>设为 NULL${c.nullable ? "" : "（字段不允许）"}</label><small>留空表示空字符串；数字、日期与布尔值会校验类型。保存前会检查该格原值。</small></div><p class="form-note">${t.session?.autoCommit === false ? "手动事务：保存后仍需点击提交；回滚可撤销。" : "自动提交：保存成功后立即提交。"}</p>`}<div id="cell-feedback" class="form-feedback" role="status"></div>`,
+    `${button("关闭", "dialog-close")}${button("复制原值", "copy-cell", "copy")}${!reason ? button("保存修改", "save-cell", "save", "primary") : ""}`,
+  );
+  if (!reason && value != null) $("#cell-input").focus();
+}
+async function saveCell() {
+  const editor = cellEditor,
+    t = tab();
+  if (!editor || editor.tabId !== t?.id || busy(t) || editor.submitted) return;
+  const value = $("#cell-input").value,
+    nullValue = $("#cell-null").checked;
+  const feedback = $("#cell-feedback"),
+    save = $('[data-action="save-cell"]');
+  const request = {
+    mode: "CELL_UPDATE",
+    sessionId: t.session.id,
+    requestId: uid(),
+    timeoutSeconds: t.timeoutSeconds || 60,
+    cellChange: {
+      executionId: editor.executionId,
+      result: editor.result,
+      row: editor.row,
+      column: editor.column,
+      value,
+      nullValue,
+    },
+  };
+  t.submitting = true;
+  t.cellSaving = true;
+  save.disabled = true;
+  $$('#dialog [data-action="dialog-close"]').forEach(
+    (b) => (b.disabled = true),
+  );
+  try {
+    feedback.textContent = "正在核对修改…";
+    const plan = await api("/executions/prepare", {
+      method: "POST",
+      body: request,
+    });
+    request.confirmationToken = plan.confirmationToken;
+    if (
+      !confirm(
+        `连接：${connection(t.connectionId)?.name}\n表：${t.object.name}\n${t.session.autoCommit === false ? "保存到当前事务，之后仍需提交或回滚。" : "本次保存会立即提交。"}\n\n${plan.units.map((u) => u.sql).join("\n")}\n\n确认保存所选单元格？`,
+      )
+    ) {
+      feedback.textContent = "已取消保存。";
+      return;
+    }
+    // Once POST is attempted, do not generate another write request after an uncertain response.
+    editor.submitted = true;
+    feedback.textContent = "正在保存，请等待…";
+    t.execution = await api("/executions", { method: "POST", body: request });
+    t.resultIndex = 0;
+    render();
+    feedback.insertAdjacentHTML(
+      "beforeend",
+      button("取消保存", "cancel-cell", "stop"),
+    );
+    const until = Date.now() + (request.timeoutSeconds + 15) * 1000;
+    while (activeStates.has(t.execution.state)) {
+      if (Date.now() > until)
+        throw new Error(
+          "未能确认保存结果，请核对数据库状态后刷新。不要重复提交。",
+        );
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      t.execution = await api(`/executions/${t.execution.id}`);
+    }
+    t.session = await api(`/sessions/${t.session.id}`);
+    syncSessionContext(t);
+    if (t.execution.state !== "SUCCEEDED")
+      throw new Error(t.execution.message || "保存失败，请查看执行消息");
+    $("#dialog").close();
+    t.submitting = false;
+    t.cellSaving = false;
+    toast(
+      t.session.autoCommit
+        ? "单元格已保存并提交。"
+        : "单元格已保存；事务待提交，可继续编辑或回滚。",
+    );
+    api(`/executions/${editor.executionId}`, { method: "DELETE" }).catch(
+      () => {},
+    );
+    await readTable(t, t.offset);
+  } catch (e) {
+    feedback.textContent = e.message;
+    if (editor.submitted) {
+      if (activeStates.has(t.execution?.state)) {
+        t.execution.state = "OUTCOME_UNKNOWN";
+        t.execution.message = e.message;
+      }
+      t.resultIndex = "messages";
+      feedback.insertAdjacentHTML(
+        "beforeend",
+        `<p>请刷新表内容后重新选择；上方输入保留供复制。</p>${button("关闭并刷新表内容", "cell-refresh", "refresh")}`,
+      );
+    }
+  } finally {
+    t.submitting = false;
+    t.cellSaving = false;
+    save.disabled = editor.submitted;
+    $$('#dialog [data-action="dialog-close"]').forEach(
+      (b) => (b.disabled = false),
+    );
+    if (t === tab()) render();
+  }
+}
 const actions = {
+  "edit-selected-cell": () => {
+    const t = tab(),
+      selected = t?.selectedCell;
+    if (selected && selected.executionId === t.execution?.id)
+      editCellDialog(t, Number(selected.result), selected.row, selected.column);
+  },
+  "save-cell": saveCell,
+  "cancel-cell": async (button) => {
+    const t = tab();
+    if (t?.cellSaving && t.execution?.mode === "CELL_UPDATE") {
+      button.disabled = true;
+      try {
+        await api(`/executions/${t.execution.id}/cancel`, { method: "POST" });
+        button.textContent = "已请求取消";
+      } catch (e) {
+        button.disabled = false;
+        throw e;
+      }
+    }
+  },
+  "cell-refresh": () => {
+    $("#dialog").close();
+    return readTable(tab(), tab().offset);
+  },
   "dismiss-execution-error": () => {
     tab().localError = null;
     renderResults(tab());
@@ -1441,7 +1649,13 @@ document.addEventListener("submit", (e) => {
       .then(() => actions[action]())
       .catch(report);
 });
+document.addEventListener("focusin", (e) => {
+  const cell = e.target.closest("[data-cell]");
+  if (cell) selectCell(cell);
+});
 document.addEventListener("click", (e) => {
+  const cell = e.target.closest("[data-cell]");
+  if (cell) selectCell(cell);
   const target = e.target.closest("[data-action]");
   if (!target || target.disabled) return;
   e.preventDefault();
@@ -1482,6 +1696,7 @@ document.addEventListener("dblclick", (e) => {
 document.addEventListener("change", (e) => {
   const target = e.target,
     t = tab();
+  if (target.id === "cell-null") $("#cell-input").disabled = target.checked;
   if (target.id === "f-driverId") fillDriverDefaults();
   if (target.id === "global-connection") {
     state.selectedConnection = target.value;
@@ -1641,8 +1856,11 @@ $("#sql-file").addEventListener("change", async (e) => {
     e.target.value = "";
   }
 });
+$("#dialog").addEventListener("cancel", (e) => {
+  if (tab()?.cellSaving) e.preventDefault();
+});
 $("#dialog").addEventListener("click", (e) => {
-  if (e.target === $("#dialog")) {
+  if (e.target === $("#dialog") && !tab()?.cellSaving) {
     const rect = e.target.getBoundingClientRect();
     if (
       e.clientX < rect.left ||
