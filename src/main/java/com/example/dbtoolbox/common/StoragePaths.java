@@ -23,19 +23,8 @@ public class StoragePaths {
         return root.resolve("config");
     }
 
-    public Path backupDir() {
-        return root.resolve("backups");
-    }
-
-    public Path failureDir() {
-        return root.resolve("failures");
-    }
-
     public Path keyFile() {
         return configDir().resolve("master.key");
     }
 
-    public Path jobHistoryFile() {
-        return configDir().resolve("jobs.json");
-    }
 }

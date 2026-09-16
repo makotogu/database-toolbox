@@ -1,0 +1,8 @@
+TREE_INITIAL 本机示例 · H2 | INFORMATION_SCHEMA | PUBLIC | 本机示例 · H2 1789529906403 | MySQL 存过验收 3kdnp2
+ROUTINE_PARAMS [{"name":"p_in","mode":"IN","position":"1","disabled":false},{"name":"p_count","mode":"INOUT","position":"2","disabled":false},{"name":"p_out","mode":"OUT","position":"3","disabled":true}]
+RESULT_TABS 执行结果 | 结果 1 | (1) | 结果 2 | (1) | 更新计数 3 | (0) | 输出参数 4 | (2) | 消息 | 执行完成 · 15 ms
+FIRST_RESULT {"headers":["#","id","id"],"body":"#\tid\nINT\n\tid\nINT\n\n1\t3\t6\n1 行 · 2 列\n双击单元格查看 / 复制\n复制表格"}
+SECOND_RESULT #	message | VARCHAR |  | 1	第二个结果集：过程体;分号保留 | 1 行 · 1 列 | 双击单元格查看 / 复制 | 复制表格
+OUT_RESULT #	位置 | 	参数 | 	模式 | 	值 |  | 1	2	p_count	INOUT	13 | 2	3	p_out	OUT	6 | 2 个输出参数 · 双击单元格查看完整值
+PASS {"confirmations":1,"uiSessions":1,"consoleErrors":0,"screenshot":"notes/reconstruction/evidence/routine.png"}
+CLEANUP_DONE

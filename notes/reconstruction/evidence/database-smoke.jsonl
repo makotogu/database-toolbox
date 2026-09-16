@@ -1,0 +1,20 @@
+{"check": "bootstrap", "status": "PASS", "version": "2.0.0", "runPrefix": "toolbox_v2_smoke_46d5d0880f"}
+{"check": "mysql.driver_import", "status": "PASS", "driverFile": "mysql-connector-j-8.0.33.jar", "sha256": "e2a3b2fc726a1ac64e998585db86b30fa8bf3f706195b78bb77c5f99bf877bd9", "driverId": "f28951c5-46c3-4563-bb11-cd603d244986"}
+{"check": "mysql.connection", "status": "PASS", "product": "MySQL", "databaseVersion": "8.4.8", "driverVersion": "mysql-connector-j-8.0.33 (Revision: 7d6b0800528b6b25c68b52dc10d6c1c8429c100c)"}
+{"check": "mysql.delimiter_script", "status": "PASS", "units": 3}
+{"check": "mysql.metadata_preview", "status": "PASS", "columns": 2, "pages": 2, "exactName": "toolbox_v2_smoke_46d5d0880f_%rows"}
+{"check": "mysql.call_inout_out_multi_results", "status": "PASS", "resultSets": 2, "duplicateLabels": true, "idempotentRequest": true}
+{"check": "mysql.script_stop_on_error", "status": "PASS", "statementStates": ["SUCCEEDED", "FAILED", "SKIPPED"]}
+{"check": "mysql.explain", "status": "PASS"}
+{"check": "mysql.objects_cleanup", "status": "PASS"}
+{"check": "postgres.driver_import", "status": "PASS", "driverFile": "postgresql-42.7.4.jar", "sha256": "188976721ead8e8627eb6d8389d500dccc0c9bebd885268a3047180274a6031e", "driverId": "24d0f428-8e7c-49b0-934a-99f43cae34ce"}
+{"check": "postgres.connection", "status": "PASS", "product": "PostgreSQL", "databaseVersion": "16.15 (Debian 16.15-1.pgdg13+2)", "driverVersion": "42.7.4"}
+{"check": "postgres.metadata_preview", "status": "PASS", "columns": 2, "pages": 2, "exactName": "toolbox_v2_smoke_46d5d0880f_%rows"}
+{"check": "postgres.dollar_block_session", "status": "PASS", "units": 3, "value": 7, "warningPreserved": true}
+{"check": "postgres.callable_function", "status": "PASS", "returned": 18}
+{"check": "postgres.explain_json", "status": "PASS"}
+{"check": "postgres.transaction_rollback", "status": "PASS", "checkedFromSecondSession": true}
+{"check": "postgres.cancel", "status": "PASS", "finalState": "CANCELED", "elapsedMs": 259, "sessionReusable": true}
+{"check": "postgres.objects_cleanup", "status": "PASS"}
+{"check": "resources_cleanup", "status": "PASS", "sessions": 3, "connections": 2}
+{"check": "summary", "status": "PASS", "checks": 19, "failures": 0}

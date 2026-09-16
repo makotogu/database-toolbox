@@ -5,7 +5,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 
-@SpringBootApplication
+@SpringBootApplication(scanBasePackages = {"com.example.dbtoolbox.workbench", "com.example.dbtoolbox.common"})
 @EnableConfigurationProperties(ToolboxProperties.class)
 public class DatabaseToolboxApplication {
 

@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "file": "database-toolbox.jar",
+  "bytes": 27871223,
+  "sha256": "305ff756b01c02de1d66307c899dd88b107f17edd80b947af78f28b8ce446b8a",
+  "java": "Amazon Corretto 1.8.0_452",
+  "os": "macOS-27.0-arm64-arm-64bit",
+  "activeJavaFiles": 26,
+  "archivedOriginalFilesHashChecked": 95,
+  "bundledDrivers": [
+    "MySQL 9.7.0",
+    "PostgreSQL 42.7.13",
+    "H2 2.2.224"
+  ]
+}

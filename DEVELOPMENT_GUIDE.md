@@ -1,232 +1,204 @@
-# 数据库测试工具箱二次开发指南
+# 数据库工作台 V2 开发指南
 
-本文说明如何在当前单模块项目里扩展数据库类型、页面、任务和测试。
+V2 保持 Java 8、Spring Boot 2.7.18、单模块 Maven，以及无构建步骤的原生 ES6 页面。最终发行物为一个 `database-toolbox.jar`；默认提供 MySQL、PostgreSQL 和 H2 驱动，同时保留用户上传驱动的接入路径。内置驱动作为 `bundled-drivers` 资源打包，不能作为应用的 `BOOT-INF/lib` 依赖混入主类路径。
 
-## 项目结构
+本文描述当前实现。历史设计保存在 [重构方案](notes/reconstruction/README.md)，验收要求见 [ACCEPTANCE.md](notes/reconstruction/ACCEPTANCE.md)，实际验证范围和剩余工作见 [DELIVERY.md](notes/reconstruction/DELIVERY.md)。
 
-```text
-src/main/java/com/example/dbtoolbox
-├── backup       # ZIP 数据包导出和恢复
-├── common       # 通用响应、异常、CSV、加密文件存储
-├── config       # Spring Boot 配置属性
-├── dashboard    # 工作台概览
-├── datasource   # 数据源配置、JDBC 连接、数据库方言
-├── job          # 异步任务和任务进度
-├── metadata     # 表和字段元数据读取
-├── sql          # SQL 类型识别和执行
-└── sync         # 字段映射同步模板和同步执行
-
-src/main/resources/static
-├── css          # base/layout/components/pages 样式拆分
-└── js           # api/state/router/components/pages/utils 前端模块
-```
-
-后端保持 `controller / service / model / store` 分层。前端使用原生 ES6 module，不引入构建工具。
-
-## 接入一种新数据库
-
-数据库兼容性主要收敛在 `datasource` 包，不建议在 `sync`、`backup`、`sql` 等业务包里直接判断数据库类型。优先扩展方言，业务服务只调用 `DatabaseDialect` 暴露的能力。
-
-1. 在 `DatabaseType` 增加枚举值。
-2. 新增一个 `DatabaseDialect` 实现类，至少实现：
-   - `defaultPort()`
-   - `driverClassName()`
-   - `buildJdbcUrl()`
-   - `quoteIdentifier()`
-   - `limitSql()`
-   - `upsertSql()`
-3. 在 `DialectRegistry` 注册新方言。
-4. 在 `datasources.js` 的类型下拉框增加选项。
-5. 在 `DialectSqlTest` 增加 URL、引用标识符、upsert SQL 测试。
-6. 如果需要新驱动，把 Maven 依赖加到 `pom.xml`。
-
-当前 `GAUSSDB` 方言按 Oracle 兼容模式实现，upsert 使用 `MERGE INTO`。如果现场驱动类或 URL 前缀不同，可以在数据源“连接参数”中配置：
+## 目录与边界
 
 ```text
-driverClassName=com.huawei.gaussdb.jdbc.Driver
-urlPrefix=jdbc:gaussdb://
+src/main/java/com/example/dbtoolbox/
+  DatabaseToolboxApplication.java
+  common/                   # API 响应、异常、加密文件存储、数据目录
+  config/                   # toolbox.storage-root 配置属性
+  workbench/
+    LocalRuntime.java       # 本机校验、令牌、数据目录锁、bootstrap
+    driver/                 # 驱动导入、候选发现、隔离加载、引用释放
+    connection/             # 连接配置、凭据脱敏、短连接、V1 迁移
+    metadata/               # catalog/schema、表结构、过程定义与参数
+    dialect/                # 标识符引用、分页、绑定参数、EXPLAIN
+    execution/              # 会话、词法拆分、准备/确认、异步执行、结果读取
+
+src/main/resources/static/
+  index.html
+  workbench/app.js           # 工作台状态、API 与交互
+  workbench/workbench.css    # 中文三栏工作台与响应式样式
+  workbench/favicon.svg
+
+src/main/resources/bundled-drivers/ # 内置驱动 JAR、依赖及版本清单
+
+src/test/java/com/example/dbtoolbox/workbench/
+scripts/smoke-v2.py          # MySQL/PostgreSQL 临时环境端到端验证
+scripts/verify-release.py    # 独立 JAR、空目录启动、重启与本机访问验证
+legacy/v1/                  # V1 源码快照，根 Maven 不编译
 ```
 
-如果填写了完整 `JDBC URL`，连接工厂会优先使用该 URL。
+启动类只扫描 `workbench` 与 `common`，并显式启用配置属性。查询核心不依赖 V1 的 `sync/backup/job/dashboard`。后端用 JDBC 直接执行，不引入 ORM、前端构建链或额外配置数据库。
 
-几个约定需要保持：
+## 驱动与连接
 
-- `quoteIdentifier()` 只处理单个字段或表段名，`schema.table` 这种复合名称使用 `SqlNameUtils.quoteQualifiedName()`。
-- `upsertSql()` 的 `matchKeys` 是目标字段名，不是源字段名。
-- 连接参数里的 `driverClassName` 和 `urlPrefix` 是连接工厂/方言使用的控制参数，不应再拼进 JDBC URL query string。
+内置驱动包括 `com.mysql:mysql-connector-j:9.7.0`、`org.postgresql:postgresql:42.7.13` 和 `com.h2database:h2:2.2.224`。MySQL 同时携带 `com.google.protobuf:protobuf-java:4.31.1`，与主驱动进入同一个隔离加载器；这是 [9.7.0 官方 POM](https://raw.githubusercontent.com/mysql/mysql-connector-j/9.7.0/src/build/misc/pom.xml) 声明的非 optional 依赖。OCI SDK 等 optional 依赖不作为默认连接能力的一部分。
 
-## 新增页面
+版本边界：MySQL 9.7.0 的 [发布说明](https://dev.mysql.com/doc/relnotes/connector-j/en/news-9-7-0.html) 明确支持 MySQL 8.0+，并遵循 [Java 8 平台要求](https://dev.mysql.com/doc/connector-j/en/connector-j-java-8.html)；PostgreSQL [官方下载页](https://jdbc.postgresql.org/download/) 将 42.7.13 列为 Java 8 的 JDBC 4.2 驱动。H2 [2.2.224 安装文档](https://github.com/h2database/h2database/blob/version-2.2.224/h2/src/docsrc/html/installation.html) 支持 Java 8，[2.3.230 起要求 Java 11](https://h2database.com/html/changelog.html)，因此不能随其他依赖一起无条件升级。
 
-1. 在 `src/main/resources/static/js/pages/` 新建页面模块，导出 `renderXxx(root)`。
-2. 在 `router.js` 导入并注册路由。
-3. 在 `main.js` 的 `nav` 增加菜单项。
-4. 页面样式放到 `pages.css`，公共按钮、表单、表格优先复用 `components.css`。
-5. 页面 API 请求统一使用 `api/client.js`。
+启动时从 `bundled-drivers` 资源向 `data/drivers/bundled-xxx/` 安装内置文件，并检查文件完整性；缺失或损坏时从发行资源恢复，不覆盖用户配置。内置驱动配置不可删除或修改驱动类；版本替换通过正常导入产生新的 `driverId`，由连接显式切换。内置和用户导入驱动使用相同的隔离执行路径，不依赖应用主类路径。
 
-页面应保持工具型布局：信息密度适中、少装饰、可扫描、操作入口明确。
+`DriverService` 将一次上传的主 JAR 和依赖包作为独立驱动配置，存入 `data/drivers/<id>/`。导入时记录 SHA-256，读取 `META-INF/services/java.sql.Driver` 候选，也允许手工指定类名。新版本驱动以新配置导入，不覆盖已有配置；连接通过 `driverId` 选择具体驱动。
 
-## 新增长任务
+加载器隔离厂商依赖，建立连接时直接调用选定 `Driver`，不依靠全局 `DriverManager` 选择版本。需要区分缺依赖、字节码版本不兼容、驱动类无效、URL 不匹配和数据库连接失败。仍被保存的连接配置或活动 JDBC 连接引用时，不允许删除驱动。
 
-备份、恢复、同步都使用 `JobService`。
+`ConnectionService` 负责加密配置和创建 JDBC 连接：
 
-开发新任务时：
+- `jdbcUrl` 原样交给用户指定的驱动；`username/password` 为专用字段，扩展参数通过 `Properties` 传入。
+- 读取列表返回脱敏视图。编辑请求中的 `<saved>` 用于保留已有 URL 参数或属性；密码留空保留原密码，`clearPassword` 显式清除。
+- 元数据使用独立短连接，不能改变 SQL 标签事务。
+- 配置必须原子落盘；损坏或密钥不匹配时报告错误并保留文件，不重新生成空配置覆盖。
 
-1. 在业务 service 中注入 `JobService`。
-2. 调用 `jobService.submit(type, name, work)` 创建任务。
-3. 在 `JobContext` 中更新：
-   - `message()`
-   - `processed()`
-   - `addProcessed()`
-   - `addFailed()`
-   - `artifact()`
-   - `failureFile()`
-4. 前端通过 `/api/jobs` 或 `/api/dashboard` 查看任务状态。
+新增数据库的普通查询能力通常只需要在页面导入驱动。只有表预览分页、定义查询、计划语法或脚本边界确实不同，才扩展 `SqlDialect`、`MetadataService` 或 `ScriptSplitter`；不要增加限制可连接数据库的白名单。
 
-## 字段映射自动填入
+H2 即开即试的 URL 模板为 `jdbc:h2:mem:toolbox;DB_CLOSE_DELAY=-1`，用户名 `sa`、密码为空；数据仅在本次应用进程中保留。GaussDB 仍由用户导入匹配厂商版本与兼容模式的驱动，不能用内置 PostgreSQL 驱动冒充其适配。
 
-同步页面的“自动填入字段”按钮在前端完成匹配，不新增后端同步模板接口。流程是：
+## 会话、执行与事务
+
+每个编辑标签在首次执行时建立 `SessionService.Session`，持有一条 JDBC Connection。不同标签独立，同一会话用 `busy` 门闩排斥并发执行、事务操作和关闭操作。
+
+执行流程：
 
 ```text
-读取源表字段 -> 读取目标表字段 -> 生成 source=target 文本 -> 回填字段映射文本框
+创建/复用会话
+→ POST /executions/prepare
+→ 核对 units、源码行号与 confirmationRequired
+→ POST /executions，回传 confirmationToken 与唯一 requestId
+→ 轮询执行状态，读取结果
+→ 终态后释放旧结果；关闭标签时关闭会话
 ```
 
-读取字段复用元数据接口：
+**所有提交都必须携带 `prepare` 返回的令牌**，即使 `confirmationRequired=false`。令牌绑定请求指纹与会话上下文；编辑 SQL、参数、模式或改变事务/会话上下文后，重新准备。同一个 `requestId` 仅可重试完全相同的执行内容；不要因网络错误重新生成 ID 自动补发写语句。
+
+`CURRENT` 定位光标单元，`SQL` 执行一个选定单元，`BLOCK`/`CALL` 保留完整代码块或调用，`SCRIPT` 顺序执行到首个错误，`EXPLAIN` 生成方言计划语句，`TABLE_PREVIEW` 使用绑定参数读取表内容。词法扫描器处理注释、引号、dollar quote 和客户端分隔符，不能退回 `split(";")`。
+
+事务约定：
+
+- 默认自动提交；手动模式提供显式 `COMMIT`、`ROLLBACK`。
+- `AUTO_COMMIT` 从关闭切换为开启时，**先 `rollback()`，再 `setAutoCommit(true)`**，不能隐式提交用户待处理事务。
+- 关闭、闲置回收和应用退出时尝试回滚未提交事务；回滚或关闭不能确认时，需要保留错误状态。
+- 释放执行后刷新实际 autoCommit、catalog、schema，避免原生事务/上下文 SQL 使 UI 与 JDBC 状态不一致。
+- DDL、存过内部提交和数据库特有事务行为不由客户端统一承诺。
+
+取消先调用活动 Statement 的 `cancel()`；驱动没有终止时，再尝试中止/关闭连接。前端需要区分 `CANCEL_REQUESTED` 与终态 `CANCELED/TIMED_OUT/OUTCOME_UNKNOWN`，不能把发送了取消请求当成数据库已经停止。
+
+## 结果与元数据
+
+`ResultReader` 使用 `Statement.execute()`、`getMoreResults()` 与 `getUpdateCount()` 消费全部 JDBC 结果；更新计数 0 有效，不能被当作结束标记。调用使用 `CallableStatement` 注册 OUT/INOUT/RETURN 参数，并在消费结果后读取输出。
+
+结果模型要保持以下约束：
 
 ```text
-GET /api/datasources/{datasourceId}/columns?schema=public&table=user_order
+ExecutionRecord
+  id, sessionId, state, mode, elapsedMs, message
+  statements[]
+    index, sql, startLine, endLine, state, warnings[], error
+    results[]
+      kind: RESULT_SET | UPDATE_COUNT | OUT_PARAMETERS | PLAN
+      columns[{index,label,jdbcType,typeName}]
+      rows[][] / updateCount / parameters[] / truncated
 ```
 
-当前匹配策略：
+- `rows` 按列序号保存，重复列名不得覆盖。
+- 大整数、小数、日期/时间使用字符串避免精度或时区被浏览器改写；NULL 保留为 JSON null。二进制展示有上限的 Base64 预览。
+- 无法解析计划树时仍保留原始计划；估算 cost 不能显示为实际毫秒。
+- 表、schema、catalog 分开传递；元数据名称匹配需转义 `%/_`，不要用点号拆分用户原始对象名。
+- 标识符依照驱动的引用规则生成，过滤值使用绑定参数，排序列由元数据验证。表预览不默认全表计数，分页不能伪装成稳定快照。
+- 泛型/尚未适配方言保留有上限的首屏读取，不提供未经实现的下一页或猜测 EXPLAIN 语法。
 
-- 先按字段名忽略大小写精确匹配。
-- 再按忽略大小写和下划线做宽松匹配，例如 `user_id` 可以匹配 `userId`。
-- 如果目标字段里有主键，自动回填到 `matchKeys`。
-- 如果目标主键不存在但匹配结果包含 `id`，默认用 `id` 作为匹配键。
+## API 速查
 
-如果以后要支持更复杂的字段名映射，例如 `src_user_name -> username` 或按字段备注匹配，优先扩展 `sync.js` 的 `buildAutoMappings()`，因为这是页面辅助能力，不影响后端同步执行模型。
+统一响应为 `{success,message,data}`。先读取 `GET /api/bootstrap` 获取本次进程的 token；非 GET/HEAD 请求带 `X-Toolbox-Token`。`LocalRuntime` 同时检查本机 Host、Origin 和跨站请求，API 响应禁用缓存。
 
-## 同步前自动创建分区
+| 路径 | 方法与用途 |
+| --- | --- |
+| `/api/bootstrap` | GET：启动令牌、版本、数据目录 |
+| `/api/drivers` | GET：驱动配置列表 |
+| `/api/drivers/import` | POST multipart：`files` 多文件、`name`、可选 `driverClass` |
+| `/api/drivers/{id}/class` | POST：指定用户导入驱动的类；内置驱动不可修改 |
+| `/api/drivers/{id}` | DELETE：删除未引用的用户导入驱动；内置驱动不可删除 |
+| `/api/connections` | GET/POST：列出和保存连接 |
+| `/api/connections/test` | POST：测试未保存/已有连接；还需检查 `data.success` |
+| `/api/connections/{id}` | DELETE：删除连接配置 |
+| `/api/connections/legacy` | GET：旧配置迁移状态 |
+| `/api/connections/{id}/objects` | GET：`kind=catalogs/schemas/tables/routines`，可选 catalog/schema |
+| `/api/connections/{id}/table-structure` | GET：catalog/schema/table 对应字段、索引、外键与警告 |
+| `/api/connections/{id}/routine-detail` | GET：catalog/schema/name/type/specificName 对应定义、参数、调用模板 |
+| `/api/sessions` | POST：按 connectionId、可选 catalog/schema 建立会话 |
+| `/api/sessions/{id}` | GET/DELETE：会话状态/关闭 |
+| `/api/sessions/{id}/transaction` | POST：`action=COMMIT/ROLLBACK/AUTO_COMMIT`，后者带 autoCommit |
+| `/api/executions/prepare` | POST：解析单元、生成预览 SQL 和确认令牌 |
+| `/api/executions` | POST：异步提交；字段定义见 `ExecutionRequest` |
+| `/api/executions/{id}` | GET/DELETE：状态与结果/删除终态缓存 |
+| `/api/executions/{id}/cancel` | POST：请求取消 |
+| `/api/executions/{id}/results/{index}` | GET：读取按执行顺序展平的某个结果；不是重新执行或数据库分页 |
 
-字段同步模板通过 `PartitionRule` 保存分区创建规则：
+HTTP 请求成功不等于数据库执行成功。检查执行终态与每条语句的 `error`；脚本可能已有成功并提交的前置语句。
 
-```text
-PartitionRule
-├── enabled
-├── partitionColumn
-├── sqlTemplate
-├── ignoreCreateErrors
-└── definitions[]
-    ├── partitionName
-    ├── fromValue
-    ├── toValue
-    └── lessThanValue
-```
+## 资源与数据生命周期
 
-执行链路在 `SyncService.executeSync()` 中：
+当前上限在相应实现中定义，扩展时同步测试和文档：
 
-```text
-validateTask
--> optional backup target table
--> ensurePartitions
--> stream source rows
--> batch upsert target rows
-```
+| 所在类 | 约束 |
+| --- | --- |
+| `DriverService` / multipart 配置 | 一次 1–32 包，单包 128 MiB、合计 256 MiB |
+| `SessionService` | 最多 8 会话；闲置约 30 分钟回收；扫描周期 60 秒 |
+| `ExecutionService` | 4 执行线程、16 队列槽；最多 16 条执行缓存；终态约 15 分钟过期 |
+| `ExecutionService` | 准备令牌最多 256 条，约 10 分钟有效；同会话执行互斥 |
+| `ExecutionRequest` | 默认 500 行、60 秒；可调至 5000 行、3600 秒；调用参数最多 256 个 |
+| `ResultReader` | 单次执行约 16 MiB、10000 行、100 个结果项；文本/二进制有单元格预览上限 |
 
-`ensurePartitions()` 会按 `sqlTemplate` 渲染每条 `PartitionDefinition` 并执行。模板支持：
+前端替换旧结果或关闭标签时删除终态执行缓存。结果、会话和准备令牌仅保存在有界内存中；应用重启不恢复或自动续跑 SQL。SQL 编辑文本仅在用户主动下载文件时保存；不要把 SQL、密码或结果自动写入 localStorage。
 
-```text
-{targetTable}
-{targetTableQuoted}
-{partitionName}
-{partitionNameQuoted}
-{partitionColumn}
-{partitionColumnQuoted}
-{fromValue}
-{toValue}
-{lessThanValue}
-```
-
-GaussDB 目标库的 Range 分区策略默认模板：
-
-```sql
-ALTER TABLE {targetTableQuoted}
-ADD PARTITION {partitionNameQuoted} VALUES LESS THAN ({lessThanValue});
-```
-
-GaussDB 目标库的 List 分区策略默认模板：
-
-```sql
-ALTER TABLE {targetTableQuoted}
-ADD PARTITION {partitionNameQuoted} VALUES ({lessThanValue});
-```
-
-页面的“探查源表分区”调用：
-
-```text
-POST /api/sync-tasks/probe-partitions
-```
-
-请求只依赖源数据源和源表，目标表可选：
-
-```json
-{
-  "sourceDatasourceId": "xxx",
-  "sourceTable": "toolbox_test.user_order",
-  "targetTable": "toolbox_test.user_order_copy"
-}
-```
-
-当前探查策略：
-
-```text
-MySQL   -> information_schema.PARTITIONS, PARTITION_METHOD 以 LIST 开头时识别为 LIST
-GaussDB -> pg_catalog.pg_partition, partstrategy = l 时识别为 LIST，boundaries 转成模板边界表达式
-```
-
-返回的 `definitions[]` 会被前端格式化为 `partitionName|fromValue|toValue|lessThanValue`。GaussDB/MySQL 的 Range/List 分区都复用 `lessThanValue` 承载分区边界表达式。
-
-如果接入新的分区语法，优先通过页面模板配置；只有变量不足或需要预检查元数据时，再扩展 `SyncService` 或新增专门的 partition service。
-
-开发时重点看这几个方法：
-
-- `probePartitions()`：读取源表分区，返回页面可编辑的 `PartitionDefinition`。
-- `ensurePartitions()`：同步写入前执行目标分区 DDL。
-- `renderPartitionSql()`：把 `PartitionRule.sqlTemplate` 和单条 `PartitionDefinition` 渲染成 SQL。
-- `transformPartitionName()`：源表和目标表名称不同的时候，做一次保守的分区名替换。
-
-模板变量里的 `{fromValue}`、`{toValue}`、`{lessThanValue}` 只会转义单引号，不会自动加引号。原因是不同数据库的分区边界可能是字符串、数字、日期表达式或 `MAXVALUE`，自动加引号反而容易生成错误 SQL。需要引号时，请在页面 SQL 模板里显式写出来。
-
-如果未来要支持更多分区策略，优先扩展 `PartitionRule.partitionStrategy`、页面策略下拉框和 `probePartitions()` 的探查分支；目标侧创建仍可继续复用 `ensurePartitions()`。
-
-## 本地配置存储
-
-数据源和同步模板通过 `EncryptedJsonFileStore` 保存到本地加密文件：
+配置和迁移文件：
 
 ```text
 data/config/master.key
-data/config/datasources.enc
-data/config/sync-tasks.enc
+data/config/connections-v2.enc
+data/config/drivers-v2.json
+data/drivers/<id>/*.jar
+data/drivers/bundled-xxx/*.jar
+data/migration-backups/legacy-v1/datasources.enc
+data/migration-backups/legacy-v1/master.key
 ```
 
-新增本地配置时，优先复用该 store，不要明文保存密码或连接串。
+首次读取连接时，若不存在 V2 配置而发现旧 `datasources.enc`，备份旧文件及密钥后迁移。保留原类型、URL、凭据和无法直接映射的历史字段；连接标记为待选驱动。损坏、重复标识或密钥异常停止迁移，不能覆盖旧文件。V1 源码、说明与旧业务在 `legacy/v1/`，不回迁到 V2 运行包。
 
-## 测试和打包
+## 修改前端
 
-必须用 JDK8 验证：
+所有运行资源必须留在 `src/main/resources/static/` 并打入 JAR，不引用 CDN。继续使用原生模块、浏览器表单和现有 API 封装，不引入额外编译步骤。
+
+修改时保持：标签文本与选区独立、结果按列位置读取、数据库错误可定位、异步执行状态真实、关闭前处理事务、所有数据库文本正确转义。表单禁止默认导航提交，避免连接凭据进入 URL。可见改动需在真实浏览器检查空态、含数据状态、错误状态及目标尺寸。
+
+## 构建与验证
+
+使用 JDK 8。macOS 可以先设置：
 
 ```bash
-JAVA_HOME=$(/usr/libexec/java_home -v 1.8) mvn test
-JAVA_HOME=$(/usr/libexec/java_home -v 1.8) mvn package
+export JAVA_HOME=$(/usr/libexec/java_home -v 1.8)
+export PATH="$JAVA_HOME/bin:$PATH"
 ```
 
-前端 JS 修改后先做语法检查：
+构建和源代码检查：
 
 ```bash
-node --check src/main/resources/static/js/pages/xxx.js
+java -version
+mvn clean verify
+node --check src/main/resources/static/workbench/app.js
+java -jar target/database-toolbox.jar
 ```
 
-打包后运行：
+Node 只用于开发时可选的语法检查，使用发行 JAR 不需要 Node。H2 仍作为 Maven 测试依赖，并另以原始 JAR 资源提供默认驱动；打包后核查三组驱动及 MySQL 的 protobuf 依赖均位于 `bundled-drivers` 资源中，未进入 `BOOT-INF/lib`。再将 `target/database-toolbox.jar` 复制到空目录执行：
 
 ```bash
-JAVA_HOME=$(/usr/libexec/java_home -v 1.8) java -jar target/database-toolbox-0.0.1-SNAPSHOT.jar
+java -jar database-toolbox.jar --server.port=18080
 ```
+
+需要真实数据库验证时，可在一次性 MySQL/PostgreSQL 环境运行 `scripts/smoke-v2.py`；参数说明通过 `python3 scripts/smoke-v2.py --help` 查看。该脚本会创建并清理测试对象、连接和会话，导入的驱动留给 UI 验证；密码可通过 `TOOLBOX_MYSQL_PASSWORD` / `TOOLBOX_POSTGRES_PASSWORD` 提供。不要在生产库执行该脚本。
+
+验证应覆盖内置驱动首次安装、缺失/损坏恢复、内置配置保护、外部驱动导入与隔离、重启后保留、查询、同名列/NULL、元数据、存过、脚本边界、计划、事务、取消与独立 JAR 启动。运行过哪些具体组合，以 [DELIVERY.md](notes/reconstruction/DELIVERY.md) 为准；本指南不代表 Oracle、GaussDB 或 Windows 已完成环境验收。

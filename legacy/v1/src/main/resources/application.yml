@@ -1,0 +1,15 @@
+server:
+  address: 127.0.0.1
+  port: 8080
+
+spring:
+  main:
+    banner-mode: "off"
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+toolbox:
+  storage-root: data
+  job-pool-size: 4
+  max-job-history: 200

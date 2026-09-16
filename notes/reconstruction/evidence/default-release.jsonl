@@ -1,0 +1,10 @@
+{"check": "packaging", "status": "PASS", "bundledStaticResources": 4, "bundledDriverProfiles": 3, "jdbcJarsOnApplicationClasspath": 0}
+{"check": "empty_directory_start", "status": "PASS", "directory": "<temporary-validation-directory>", "version": "2.0.0"}
+{"check": "static_resources", "status": "PASS"}
+{"check": "local_request_guards", "status": "PASS", "negativeCases": 4}
+{"check": "default_drivers_ready", "status": "PASS", "drivers": ["MySQL 9.7.0", "PostgreSQL 42.7.13", "H2 2.2.224"]}
+{"check": "bundled_driver_query", "status": "PASS", "withoutUpload": true}
+{"check": "user_driver_coexists", "status": "PASS"}
+{"check": "same_directory_lock", "status": "PASS"}
+{"check": "restart_persistence", "status": "PASS", "driverRetained": true, "connectionRetained": true, "queryValue": 42}
+{"check": "summary", "status": "PASS", "checks": 9, "failures": 0}

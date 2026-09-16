@@ -3,6 +3,10 @@ server:
   port: 8080
 
 spring:
+  servlet:
+    multipart:
+      max-file-size: 128MB
+      max-request-size: 256MB
   main:
     banner-mode: "off"
   jackson:
@@ -11,5 +15,3 @@ spring:
 
 toolbox:
   storage-root: data
-  job-pool-size: 4
-  max-job-history: 200

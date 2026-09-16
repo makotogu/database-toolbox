@@ -2,3 +2,15 @@ target/
 data/
 .m2/
 .DS_Store
+.local-backups/
+dist/
+.idea/
+.vscode/
+logs/
+run/
+notes/code-loop/
+.env
+.env.*
+*.pem
+*.key
+*.enc

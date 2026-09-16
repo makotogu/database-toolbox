@@ -1,0 +1,72 @@
+[
+  {
+    "name": "com.example.dbtoolbox.workbench.connection.ConnectionServiceTest",
+    "tests": "8",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.example.dbtoolbox.workbench.dialect.SqlDialectTest",
+    "tests": "10",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.example.dbtoolbox.workbench.driver.BundledDriverInstallerTest",
+    "tests": "4",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.example.dbtoolbox.workbench.driver.DriverServiceTest",
+    "tests": "8",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.example.dbtoolbox.workbench.execution.CancellationIsolationTest",
+    "tests": "1",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.example.dbtoolbox.workbench.execution.ExecutionServiceTest",
+    "tests": "9",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.example.dbtoolbox.workbench.execution.ResultReaderTest",
+    "tests": "1",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.example.dbtoolbox.workbench.execution.ScriptSplitterTest",
+    "tests": "10",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.example.dbtoolbox.workbench.execution.SessionLifecycleTest",
+    "tests": "2",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.example.dbtoolbox.workbench.metadata.MetadataServiceTest",
+    "tests": "4",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  }
+]

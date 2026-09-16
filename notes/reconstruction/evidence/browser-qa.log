@@ -1,0 +1,14 @@
+PLAN PASS 执行结果
+执行计划 1
+(1)
+消息
+执行完成 · 0 ms
+#	PLAN
+CHARACTER VARYING
+
+1	SELECT "ID" AS "ID", "BALANCE" AS "ID", "NAME", "NOTE" FROM "PUBLIC"."CUSTOMERS" /* PUBLIC.PRIMARY_KEY_6 */ ORDER BY 1 /* index sorted */
+展示数据库原始计划输出；此格式尚未转换为计划树。
+FILTER PASS
+SIZE { w: 390, body: 390, h: 844, bodyH: 844 }
+ERRORS []
+UI PASS query, duplicate labels, cell preview, explain, objects, structure, typed filter, responsive

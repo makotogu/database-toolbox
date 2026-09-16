@@ -1,0 +1,17 @@
+{
+  "checks": [
+    "initial status",
+    "missing jar error",
+    "start from other cwd with Chinese/spaced path",
+    "duplicate start is idempotent",
+    "real jar and default drivers ready",
+    "status uses recorded port",
+    "restart changes process",
+    "separate startup logs",
+    "graceful stop and repeated stop",
+    "unrelated PID is not signaled"
+  ],
+  "count": 10,
+  "directory": "<temporary-validation-directory>",
+  "status": "PASS"
+}

@@ -1,0 +1,67 @@
+[
+  {
+    "id": "bundled-mysql-9_7_0",
+    "name": "MySQL",
+    "driverClass": "com.mysql.cj.jdbc.Driver",
+    "candidates": [
+      "com.mysql.cj.jdbc.Driver"
+    ],
+    "files": [
+      "mysql-connector-j-9.7.0.jar",
+      "protobuf-java-4.31.1.jar"
+    ],
+    "sha256": [
+      "0353648eaa1c91e0f4020c959abf756bc866ffd583df22ae6b6f6e0cbd43eb44",
+      "d60dfe7c68a0d38a248cca96924f289dc7e1966a887ee7cae397701af08575ae"
+    ],
+    "revision": 1,
+    "status": "ready",
+    "bundled": true,
+    "version": "9.7.0",
+    "urlTemplate": "jdbc:mysql://localhost:3306/mydb",
+    "sourceUrl": "https://github.com/mysql/mysql-connector-j/tree/9.7.0",
+    "license": "GPL-2.0 with Universal FOSS Exception 1.0; protobuf BSD-3-Clause"
+  },
+  {
+    "id": "bundled-postgresql-42_7_13",
+    "name": "PostgreSQL",
+    "driverClass": "org.postgresql.Driver",
+    "candidates": [
+      "org.postgresql.Driver"
+    ],
+    "files": [
+      "postgresql-42.7.13.jar"
+    ],
+    "sha256": [
+      "6e0e4cc2d8cae902084f8a2b18728b073a6fd9d1f87c9d8bff8f298c18185b93"
+    ],
+    "revision": 1,
+    "status": "ready",
+    "bundled": true,
+    "version": "42.7.13",
+    "urlTemplate": "jdbc:postgresql://localhost:5432/mydb",
+    "sourceUrl": "https://github.com/pgjdbc/pgjdbc/tree/REL42.7.13",
+    "license": "BSD-2-Clause"
+  },
+  {
+    "id": "bundled-h2-2_2_224",
+    "name": "H2",
+    "driverClass": "org.h2.Driver",
+    "candidates": [
+      "org.h2.Driver"
+    ],
+    "files": [
+      "h2-2.2.224.jar"
+    ],
+    "sha256": [
+      "b9d8f19358ada82a4f6eb5b174c6cfe320a375b5a9cb5a4fe456d623e6e55497"
+    ],
+    "revision": 1,
+    "status": "ready",
+    "bundled": true,
+    "version": "2.2.224",
+    "urlTemplate": "jdbc:h2:mem:toolbox;DB_CLOSE_DELAY=-1",
+    "sourceUrl": "https://github.com/h2database/h2database/tree/version-2.2.224",
+    "license": "MPL-2.0 OR EPL-1.0"
+  }
+]

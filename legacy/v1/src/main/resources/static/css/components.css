@@ -1,0 +1,349 @@
+.panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+}
+
+.panel-header {
+    padding: 15px 18px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.panel-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 800;
+}
+
+.panel-body {
+    padding: 18px;
+}
+
+.form {
+    display: grid;
+    gap: 16px;
+}
+
+.field {
+    display: grid;
+    gap: 6px;
+}
+
+.field label {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.input,
+.select,
+.textarea {
+    width: 100%;
+    border: 1px solid var(--line-strong);
+    background: var(--control-bg);
+    border-radius: 7px;
+    padding: 9px 10px;
+    color: var(--text);
+    outline: 0;
+    transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
+}
+
+.textarea {
+    min-height: 120px;
+    resize: vertical;
+    line-height: 1.45;
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.input::placeholder,
+.textarea::placeholder {
+    color: var(--muted-2);
+}
+
+.button-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.btn {
+    border: 1px solid var(--line-strong);
+    border-radius: 7px;
+    background: var(--control-bg);
+    color: var(--text);
+    padding: 9px 12px;
+    min-height: 36px;
+    font-weight: 700;
+}
+
+.btn:hover {
+    border-color: var(--accent);
+    box-shadow: var(--shadow);
+}
+
+.btn.primary {
+    background: var(--accent);
+    color: var(--on-accent);
+    border-color: var(--accent);
+}
+
+.btn.primary:hover {
+    background: var(--accent-strong);
+}
+
+.btn.danger {
+    color: var(--danger);
+    border-color: var(--danger-line);
+    background: var(--danger-soft);
+}
+
+.btn.danger:hover {
+    border-color: var(--danger);
+    box-shadow: var(--shadow);
+}
+
+.btn.ghost {
+    background: transparent;
+}
+
+.btn.compact {
+    min-height: 28px;
+    padding: 4px 9px;
+    font-size: 12px;
+}
+
+.table-wrap {
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+
+.table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    min-width: 720px;
+}
+
+.table th,
+.table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: top;
+}
+
+.table th {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    background: var(--surface-raised);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.table tbody tr:last-child td {
+    border-bottom: 0;
+}
+
+.table tr:hover td {
+    background: var(--table-hover);
+}
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.badge.success {
+    background: var(--success-soft);
+    color: var(--success);
+}
+
+.badge.warn {
+    background: var(--warn-soft);
+    color: var(--warn);
+}
+
+.badge.danger {
+    background: var(--danger-soft);
+    color: var(--danger);
+}
+
+.muted {
+    color: var(--muted);
+}
+
+.toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.section-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 12px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.section-title::before {
+    content: "";
+    width: 6px;
+    height: 16px;
+    border-radius: 999px;
+    background: var(--accent);
+}
+
+.notice {
+    padding: 11px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface-raised);
+    color: var(--muted);
+    line-height: 1.6;
+    font-size: 12px;
+}
+
+.notice strong {
+    color: var(--text);
+}
+
+.notice.success {
+    border-color: var(--success-line);
+    background: var(--success-soft);
+    color: var(--success);
+}
+
+.notice.warn {
+    border-color: var(--warn-line);
+    background: var(--warn-soft);
+    color: var(--warn);
+}
+
+.notice.danger,
+.danger-zone {
+    border-color: var(--danger-line);
+    background: var(--danger-soft);
+    color: var(--danger);
+}
+
+.form-section {
+    display: grid;
+    gap: 12px;
+    padding: 0 0 16px;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    border-radius: 0;
+    background: transparent;
+}
+
+.form-section.compact {
+    padding: 0 0 16px;
+}
+
+.form-section > .section-title:last-child {
+    margin-bottom: 0;
+}
+
+.form-section details,
+details.form-section {
+    display: block;
+}
+
+details.form-section summary {
+    cursor: pointer;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 800;
+    list-style-position: outside;
+}
+
+details.form-section[open] summary {
+    margin-bottom: 12px;
+}
+
+details.form-section[open] > :not(summary) + :not(summary) {
+    margin-top: 12px;
+}
+
+.danger-zone {
+    padding: 12px;
+    border: 1px solid var(--danger-line);
+    border-radius: var(--radius);
+}
+
+.panel-body > .notice + * {
+    margin-top: 14px;
+}
+
+.toast-root {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    display: grid;
+    gap: 10px;
+    z-index: 10;
+}
+
+.toast {
+    min-width: 260px;
+    max-width: 380px;
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: var(--toast-bg);
+    color: var(--surface);
+    box-shadow: var(--shadow);
+    animation: toast-in .18s ease-out;
+}
+
+.toast.error {
+    background: var(--toast-error-bg);
+    color: #fff;
+}
+
+@keyframes toast-in {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
