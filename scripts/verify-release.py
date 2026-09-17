@@ -105,7 +105,7 @@ def main():
 
     with zipfile.ZipFile(artifact) as jar:
         entries = jar.namelist()
-        for resource in ("index.html", "workbench/app.js", "workbench/workbench.css", "workbench/favicon.svg"):
+        for resource in ("index.html", "workbench/app.js", "workbench/sql-highlight.js", "workbench/sql-drafts.js", "workbench/workbench.css", "workbench/favicon.svg"):
             assert "BOOT-INF/classes/static/" + resource in entries
         assert not any(name.startswith("BOOT-INF/lib/") and any(word in name.lower() for word in ("h2-", "mysql-connector", "postgresql-")) for name in entries)
         assert not any("com/example/dbtoolbox/" + name + "/" in entry for name in ("sync", "backup", "job", "datasource") for entry in entries)
@@ -115,13 +115,13 @@ def main():
         for profile in catalog:
             for filename, expected_hash in zip(profile["files"], profile["sha256"]):
                 assert hashlib.sha256(jar.read("BOOT-INF/classes/bundled-drivers/" + filename)).hexdigest() == expected_hash
-    log("packaging", bundledStaticResources=4, bundledDriverProfiles=3, jdbcJarsOnApplicationClasspath=0)
+    log("packaging", bundledStaticResources=6, bundledDriverProfiles=3, jdbcJarsOnApplicationClasspath=0)
     process = None
     try:
         process, token = start("first-start")
         assert len(list(directory.glob("*.jar"))) == 1
         log("empty_directory_start", directory=str(directory), version=api("GET", "/api/bootstrap")["version"])
-        for resource in ("/", "/workbench/app.js", "/workbench/workbench.css", "/workbench/favicon.svg"):
+        for resource in ("/", "/workbench/app.js", "/workbench/sql-highlight.js", "/workbench/sql-drafts.js", "/workbench/workbench.css", "/workbench/favicon.svg"):
             assert request("GET", resource)
         log("static_resources")
         saved_token, token = token, None
@@ -137,11 +137,16 @@ def main():
         driver = next(item for item in defaults if item["driverClass"] == "org.h2.Driver")
         assert driver["driverClass"] == "org.h2.Driver"
         log("default_drivers_ready", drivers=[item["name"] + " " + item["version"] for item in defaults])
-        connection = api("POST", "/api/connections", dict(name="Release persistence", driverId=driver["id"], jdbcUrl="jdbc:h2:file:./verification-db", username="sa", password=""))
+        connection = api("POST", "/api/connections", dict(name="Release persistence", driverId=driver["id"], jdbcUrl="jdbc:h2:file:./verification-db", username="sa", password="", saveSqlDrafts=True))
         session = api("POST", "/api/sessions", {"connectionId": connection["id"]})
         execute(session, "CREATE TABLE verification(n INTEGER); INSERT INTO verification VALUES (42); SELECT * FROM verification;")
         api("DELETE", "/api/sessions/" + session["id"])
         log("bundled_driver_query", withoutUpload=True)
+        draft_sql = "INSERT INTO verification VALUES (99); -- saved but never executed"
+        draft_path = "/api/connections/" + connection["id"] + "/sql-drafts"
+        draft = api("PUT", draft_path, dict(revision=api("GET", draft_path)["revision"], requestId=str(uuid.uuid4()),
+            tabs=[dict(id=str(uuid.uuid4()), name="Restart fixture.sql", sql=draft_sql)]))
+        assert draft_sql.encode() not in (directory / "data/config/sql-drafts.enc").read_bytes()
         imported = None
         if args.h2_driver:
             boundary = "Release" + uuid.uuid4().hex
@@ -175,6 +180,9 @@ def main():
         assert any(item.get("rows") == [[42]] for unit in result["statements"] for item in unit["results"]), result
         api("DELETE", "/api/sessions/" + session["id"])
         log("restart_persistence", driverRetained=True, connectionRetained=True, queryValue=42)
+        restored_draft = api("GET", draft_path)
+        assert restored_draft == draft
+        log("sql_draft_restart", textRetained=True, autoExecuted=False)
     finally:
         stop(process)
     (directory / "verification.json").write_text(json.dumps(checks, ensure_ascii=False, indent=2))

@@ -156,13 +156,20 @@ HTTP 请求成功不等于数据库执行成功。检查执行终态与每条语
 | `ExecutionRequest` | 默认 500 行、60 秒；可调至 5000 行、3600 秒；调用参数最多 256 个 |
 | `ResultReader` | 单次执行约 16 MiB、10000 行、100 个结果项；文本/二进制有单元格预览上限 |
 
-前端替换旧结果或关闭标签时删除终态执行缓存。结果、会话和准备令牌仅保存在有界内存中；应用重启不恢复或自动续跑 SQL。SQL 编辑文本仅在用户主动下载文件时保存；不要把 SQL、密码或结果自动写入 localStorage。
+前端替换旧结果或关闭标签时删除终态执行缓存。结果、会话和准备令牌仅保存在有界内存中；应用重启不恢复或自动续跑 SQL。SQL 文本只允许用户手动下载，或在对应连接明确开启 `saveSqlDrafts` 后加密保存为草稿；禁止把 SQL、密码或结果写入 localStorage/sessionStorage。
+
+`ConnectionProfile.saveSqlDrafts` 默认 false，连接列表只返回开关，不返回 SQL 或内部 `sqlDraftEpoch`。开启保存创建服务端 generation；关闭后重新开启会换 generation，拒绝迟到的首次保存。`GET/PUT /api/connections/{id}/sql-drafts` 在 `ConnectionService` 的同一监视器内检查连接开关并读写 `SqlDrafts`；更新配置、关闭选项、删除连接与草稿写入串行化，不建立 JDBC 连接。
+
+PUT 包含 `{revision, requestId, tabs: [{id, name, sql}]}`；每连接最多 20 个标签，每条 SQL 最多 1 Mi UTF-16 单元，存储合计 8 Mi，名称最多 200 字符，标签 ID 为 UUID 且不可重复。响应仅有 revision 与 tabs。以 revision 比较交换，冲突返回 409，不覆盖文件；同 requestId、旧 revision 与完全相同文本可安全重试一次最近的成功请求，复用 ID 改写内容被拒绝。前端每连接一个串行队列，900ms 防抖，保存请求有 15s 截止；网络失败保留原 payload/requestId，用户点击重试后先确认该请求，再提交后续编辑。没有成功读取旧草稿时禁止自动覆盖。SQL 草稿只恢复普通 SQL 标签文本/名称/连接引用，选择、滚动和 SQL 执行上下文不持久化。恢复时分配独立页面标签 ID，持久化 ID 保留在 draftId；不同连接相同存储 ID 不可共用页面标签。活动标签按需读取 schema/catalog 元数据，仍使用独立短连接，不创建执行会话。
+
+草稿使用 `EncryptedJsonFileStore` 的 AES-GCM 与现有 `master.key`，文件权限复用 `PrivateFiles`。关闭选项或删除连接先清除草稿；清除失败则返回失败并保留原连接配置，不能宣称成功。后续配置写入若失败，已经清除的草稿不会回填。加密文件损坏时保留原文件，禁止以空列表替换。此清除不覆盖用户备份、下载文件或文件系统快照。
 
 配置和迁移文件：
 
 ```text
 data/config/master.key
 data/config/connections-v2.enc
+data/config/sql-drafts.enc
 data/config/connections-v2.enc.legacy-backup/connections-v2.enc
 data/config/connections-v2.enc.legacy-backup/master.key
 data/config/drivers-v2.json
@@ -190,6 +197,8 @@ data/migration-backups/legacy-v1/master.key
 
 所有运行资源必须留在 `src/main/resources/static/` 并打入 JAR，不引用 CDN。继续使用原生模块、浏览器表单和现有 API 封装，不引入额外编译步骤。
 
+`sql-highlight.js` 是有 200000 字符上限的显示词法扫描，不参与执行解析；不增加第三方依赖。文本全部转义后写入 `aria-hidden` 的高亮层，textarea 是唯一输入源；两层共享字体与滚动位置，保持原生键盘、选区和撤销。composition 期间及强制配色时回到原生文本显示。视觉着色覆盖通用关键词、数字、注释、引号标识符、dollar quote 与 q quote，不宣称验证厂商语法。`sql-drafts.js` 管理保存状态，必须拒绝旧异步响应改变已关闭的保存状态。
+
 修改时保持：标签文本与选区独立、结果按列位置读取、数据库错误可定位、异步执行状态真实、关闭前处理事务、所有数据库文本正确转义。表单禁止默认导航提交，避免连接凭据进入 URL。可见改动需在真实浏览器检查空态、含数据状态、错误状态及目标尺寸。
 
 轮询有单一调度入口和互斥标记；每个只读请求有 AbortController、15 秒读取截止时间及所属执行/连接标识校验。取消写请求使旧 poll 失效，但不会中断或重发写请求。读失败保留活动状态并重试读取。连接上下文和对象树刷新同样拒绝过时代次。执行状态变化只重绘当前标签，保留编辑器节点、焦点、选区和导航树。
@@ -203,6 +212,8 @@ data/migration-backups/legacy-v1/master.key
 ## 构建与验证
 
 异步前端逻辑回归：`node scripts/test-async-ui.cjs`。真实浏览器仍需检查取消、连接切换、恢复和编辑器焦点；Node 逻辑测试不能代替渲染验收。
+
+编辑器逻辑回归：`node scripts/test-sql-editor.cjs`；沿用贡献指南的 Playwright 环境运行 `node scripts/smoke-sql-editor-ui.cjs`，仅对临时工作台实例执行。覆盖隐私开关、文本原样显示、选区执行、保存失败重试、多页面冲突、关闭清理和窄屏布局。验收记录见 [SQL 高亮与可选草稿](notes/features/SQL_EDITOR_DRAFTS.md)。
 
 使用 JDK 8。macOS 可以先设置：
 

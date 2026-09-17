@@ -68,6 +68,8 @@ TOOLBOX_PLAYWRIGHT_PATH="$TASK_UI/node_modules/playwright" \
 
 异步状态回归可直接运行 `node scripts/test-async-ui.cjs`，不需要第三方 Node 依赖。同样的 Playwright 环境可运行 `scripts/smoke-hardening-ui.cjs`，检查连接切换、取消旧响应、编辑器焦点和失效会话恢复；它创建独立 H2 夹具，默认截图 `/tmp/toolbox-hardening-ui.png`。逻辑测试不能替代浏览器检查。第一批 Issue #2 的实际记录见 [安全边界与可靠性验收](notes/features/ISSUE_2_HARDENING.md)。
 
+SQL 编辑器检查使用 `node scripts/test-sql-editor.cjs` 和 `node scripts/smoke-sql-editor-ui.cjs`，后者沿用上面的 Playwright 环境变量、独立 H2 夹具及截图配置。覆盖高亮与选区、按连接选择的草稿保存、隐私确认、失败重试、多页面冲突和清除；记录见 [SQL 编辑器验收](notes/features/SQL_EDITOR_DRAFTS.md)。
+
 可视化单元格修改至少检查：点击选中与 Enter/双击打开、普通字段保存、NULL 与空字符串、只读字段说明、冲突失败保留输入、手动提交/回滚后刷新。检查文字和值经过转义，不把数据库内容插入可执行 HTML。
 
 不具备某数据库或平台时，明确写“未验证”，不要以 H2 或源码推断替代厂商实测。

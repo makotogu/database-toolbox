@@ -1,3 +1,6 @@
+import { highlightSql } from "./sql-highlight.js";
+import { createDraftManager } from "./sql-drafts.js";
+
 const icons = {
   database:
     '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0"/>',
@@ -130,9 +133,55 @@ async function api(path, options = {}) {
     );
   }
   if (!response.ok || payload.success === false)
-    throw new Error(payload.message || `请求失败（HTTP ${response.status}）`);
+    throw Object.assign(new Error(payload.message || `请求失败（HTTP ${response.status}）`), {status: response.status});
   return payload.data === undefined ? payload : payload.data;
 }
+const drafts = createDraftManager({
+  uuid: () => crypto.randomUUID(),
+  snapshot: id => state.tabs.filter(t => t.type === "sql" && t.connectionId === id && t.sql.length)
+    .map(t => ({id: t.draftId || t.id, name: t.name, sql: t.sql})),
+  changed: updateDraftStatus,
+  request: async (id, body) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      return await api(`/connections/${id}/sql-drafts`, {signal: controller.signal, ...(body ? {method: "PUT", body} : {})});
+    } catch (e) {
+      if (e.name === "AbortError") throw new Error("草稿保存或读取超时，状态未确认。可重试保存；刷新前请先下载 SQL。");
+      throw e;
+    } finally { clearTimeout(timer); }
+  },
+});
+function updateDraftStatus() {
+  const el = $("#draft-status"), t = tab();
+  if (!el || !t) return;
+  const status = t.type === "sql" ? drafts.status(t.connectionId) : {label: "调用标签不保存草稿", message: "可用保存 SQL 文件保留文本；调用参数不自动保存。"};
+  el.textContent = status.label; el.title = status.message || status.label;
+  el.classList.toggle("error-text", !!status.error);
+}
+function draftStatusDialog() {
+  const t = tab(), status = drafts.status(t.connectionId);
+  showDialog("SQL 草稿", `<p>${esc(t.type === "sql" ? status.message || status.label : "调用标签及其参数不自动保存，请下载 SQL 文件。")}</p>`,
+    `${t.type === "sql" && status.retry ? button("重试保存", "retry-drafts", null, "primary") : ""}${button("关闭", "dialog-close", null)}`);
+}
+function syncHighlightScroll() {
+  const ed = $("#sql-editor"), layer = $("#sql-highlight");
+  if (!ed || !layer) return;
+  layer.style.width = `${ed.clientWidth}px`; layer.style.height = `${ed.clientHeight}px`;
+  layer.scrollTop = ed.scrollTop; layer.scrollLeft = ed.scrollLeft;
+  $("#line-numbers").scrollTop = ed.scrollTop;
+}
+function updateHighlight() {
+  const ed = $("#sql-editor"), layer = $("#sql-highlight"), label = $("#highlight-status");
+  if (!ed || !layer) return;
+  const html = ed.dataset.composing ? null : highlightSql(ed.value);
+  ed.classList.toggle("highlighted", html !== null);
+  layer.hidden = html === null;
+  layer.innerHTML = html === null ? "" : html + "\n ";
+  if (label) label.textContent = html === null ? (ed.dataset.composing ? "中文输入中" : "大文本 · 高亮暂停") : "SQL 高亮";
+  syncHighlightScroll();
+}
+const editorResize = new ResizeObserver(syncHighlightScroll);
 function toast(message, error = false) {
   const el = document.createElement("div");
   el.className = `toast${error ? " error" : ""}`;
@@ -179,7 +228,9 @@ function rememberEditor() {
   const t = tab(),
     editor = $("#sql-editor");
   if (t && editor) {
+    const changed = t.sql !== editor.value;
     t.sql = editor.value;
+    if (changed) drafts.schedule();
     t.selection = [editor.selectionStart, editor.selectionEnd];
     t.scrollTop = editor.scrollTop;
     t.scrollLeft = editor.scrollLeft;
@@ -199,7 +250,7 @@ function captureParameters(t) {
     p.isNull = $("[name=isNull]", row).checked;
   });
 }
-function newTab(spec = {}) {
+function newTab(spec = {}, restoring = false) {
   rememberEditor();
   const t = {
     id: uid(),
@@ -220,7 +271,10 @@ function newTab(spec = {}) {
   state.tabs.push(t);
   state.activeTab = t.id;
   render();
-  if (t.connectionId) loadContext(t);
+  if (!restoring) {
+    if (t.connectionId) loadContext(t);
+    drafts.schedule();
+  }
   return t;
 }
 function render() {
@@ -357,6 +411,7 @@ async function loadObjects(id, scope, key, refresh = false) {
   renderTree();
 }
 async function loadContext(t) {
+  t.restoreContext = false;
   const connectionId = t.connectionId, key = `context:${t.id}`, scope = beginRead(key);
   const fetchOptions = { signal: scope.controller.signal };
   try {
@@ -387,7 +442,10 @@ function renderTab(t) {
     ed.setSelectionRange(...t.selection);
     ed.scrollTop = t.scrollTop || 0;
     ed.scrollLeft = t.scrollLeft || 0;
-    $("#line-numbers").scrollTop = ed.scrollTop;
+    editorResize.disconnect();
+    editorResize.observe(ed);
+    updateHighlight();
+    updateDraftStatus();
   }
   if (t.type === "table" && $("#filter-operator"))
     $("#filter-operator").value = t.filterOperator || "=";
@@ -402,7 +460,7 @@ function transactionControls(t) {
   return `<label class="check-label transaction-label"><input id="auto-commit" type="checkbox" ${t.session?.autoCommit !== false ? "checked" : ""} ${unavailable ? "disabled" : ""}>自动提交</label>${button("提交", "commit", "check", "ghost", !t.session || t.session.autoCommit || unavailable ? "disabled" : "")}${button("回滚", "rollback", "undo", "ghost", !t.session || t.session.autoCommit || unavailable ? "disabled" : "")}`;
 }
 function editorMarkup(t) {
-  return `<section class="editor-pane" aria-label="SQL 编辑器"><div class="editor"><div id="line-numbers" class="line-numbers" aria-hidden="true">${lineNumbers(t.sql)}</div><textarea id="sql-editor" class="sql-editor" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="SQL 编辑区" placeholder="-- 在这里编写 SQL\n-- ⌘ / Ctrl + Enter 执行当前语句\n-- 选择一段 SQL 执行选区，或完整执行数据库代码块"></textarea></div><div class="editor-footer"><span id="cursor-position">行 1，列 1</span><span class="spacer"></span><span>${t.type === "routine" ? "JDBC 调用与原生 SQL" : "SQL"}</span><span>UTF-8</span><span>拖动右下角调整高度</span></div></section>`;
+  return `<section class="editor-pane" aria-label="SQL 编辑器"><div class="editor"><div id="line-numbers" class="line-numbers" aria-hidden="true">${lineNumbers(t.sql)}</div><div class="sql-editor-stack"><pre id="sql-highlight" class="sql-highlight" aria-hidden="true"></pre><textarea id="sql-editor" class="sql-editor" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="SQL 编辑区" placeholder="-- 在这里编写 SQL\n-- ⌘ / Ctrl + Enter 执行当前语句\n-- 选择一段 SQL 执行选区，或完整执行数据库代码块"></textarea></div></div><div class="editor-footer"><span id="cursor-position">行 1，列 1</span><button id="draft-status" class="draft-status" data-action="draft-status" aria-live="polite"></button><span class="spacer"></span><span id="highlight-status">SQL 高亮</span><span>UTF-8</span><span>拖动右下角调整高度</span></div></section>`;
 }
 function lineNumbers(sql) {
   return Array.from(
@@ -626,7 +684,7 @@ function renderStatus() {
     el = $("#status-bar");
   if (!el) return;
   const s = t?.session;
-  el.innerHTML = `<span>${icon("database")}${esc(connection(t?.connectionId)?.name || "未选择连接")}</span><span class="session-status">${s ? esc(stateLabels[s.state] || s.state) : "会话未建立"}</span><span class="${s?.autoCommit === false ? "warning" : ""}">${s?.autoCommit === false ? "手动提交" : "自动提交"}</span><span class="spacer"></span>${t?.pollError ? `<span class="warning">${esc(t.pollError)}</span>` : ""}${t?.execution ? `<span class="status-message">${esc(stateLabels[t.execution.state] || t.execution.state)}</span><span>${icon("clock")}${duration(t.execution.elapsedMs)}</span>` : ""}<span class="optional">结果与 SQL 不自动保存到磁盘</span>`;
+  el.innerHTML = `<span>${icon("database")}${esc(connection(t?.connectionId)?.name || "未选择连接")}</span><span class="session-status">${s ? esc(stateLabels[s.state] || s.state) : "会话未建立"}</span><span class="${s?.autoCommit === false ? "warning" : ""}">${s?.autoCommit === false ? "手动提交" : "自动提交"}</span><span class="spacer"></span>${t?.pollError ? `<span class="warning">${esc(t.pollError)}</span>` : ""}${t?.execution ? `<span class="status-message">${esc(stateLabels[t.execution.state] || t.execution.state)}</span><span>${icon("clock")}${duration(t.execution.elapsedMs)}</span>` : ""}<span class="optional">结果不落盘 · SQL 草稿按连接设置保存</span>`;
 }
 async function ensureSession(t) {
   if (t.session && ["BROKEN", "CLOSED"].includes(t.session.state))
@@ -834,7 +892,10 @@ function renderExecutionChange(t) {
   renderTab(t);
   if (editor && $("#sql-editor")) {
     $("#sql-editor").replaceWith(editor);
+    editorResize.disconnect();
+    editorResize.observe(editor);
     if (focused) editor.focus({ preventScroll: true });
+    updateHighlight();
   }
   renderStatus();
   const tabButton = $$('[data-action="select-tab"]').find((b) => b.dataset.id === t.id);
@@ -972,7 +1033,7 @@ async function connectionDialog(id) {
       )
       .join(
         "",
-      )}</select><small>方言决定代码块、分页和 EXPLAIN 的生成规则。</small></div><div class="form-field"><label>已保存凭据</label><label class="check-label"><input name="clearPassword" type="checkbox">清除已保存密码</label><small>修改密码时，在密码框中输入新密码。</small></div>${field("默认 catalog（可选）", "catalog", c.catalog || "")}${field("默认 schema（可选）", "schema", c.schema || "")}<div class="form-field wide"><label for="f-properties">JDBC 扩展属性（JSON 对象）</label><textarea id="f-properties" name="properties" class="mono" spellcheck="false">${esc(JSON.stringify(c.properties || {}, null, 2))}</textarea><small>例如 { "connectTimeout": "10" }；用户名与密码使用上方专用字段；&lt;saved&gt; 表示保留已有值。</small></div></div><div id="connection-feedback" class="form-feedback" role="status"></div></form>`,
+      )}</select><small>方言决定代码块、分页和 EXPLAIN 的生成规则。</small></div><div class="form-field"><label>已保存凭据</label><label class="check-label"><input name="clearPassword" type="checkbox">清除已保存密码</label><small>修改密码时，在密码框中输入新密码。</small></div>${field("默认 catalog（可选）", "catalog", c.catalog || "")}${field("默认 schema（可选）", "schema", c.schema || "")}<div class="form-field wide"><label for="f-properties">JDBC 扩展属性（JSON 对象）</label><textarea id="f-properties" name="properties" class="mono" spellcheck="false">${esc(JSON.stringify(c.properties || {}, null, 2))}</textarea><small>例如 { "connectTimeout": "10" }；用户名与密码使用上方专用字段；&lt;saved&gt; 表示保留已有值。</small></div><div class="form-field wide draft-setting"><label class="check-label"><input name="saveSqlDrafts" type="checkbox" ${c.saveSqlDrafts ? "checked" : ""} aria-describedby="draft-privacy">保存此连接的 SQL 草稿（可选）</label><small id="draft-privacy">默认关闭。开启后，SQL 标签的文本和名称会自动加密保存到本机，刷新后可恢复。SQL 可能含口令、个人信息或业务数据；拥有本机账户与密钥的人仍可读取。结果、调用参数和事务状态不保存，也不会自动执行。关闭此选项会清除该连接的已存草稿；下载文件和备份需自行管理。</small></div></div><div id="connection-feedback" class="form-feedback" role="status"></div></form>`,
     `${id ? button("删除连接", "delete-connection", "trash", "danger", `data-id="${id}"`) : ""}<span class="spacer"></span>${button("测试连接", "test-connection", "link")}${button("取消", "dialog-close", null)}${button("保存连接", "save-connection", "check", "primary")}`,
     true,
   );
@@ -994,6 +1055,7 @@ function connectionPayload() {
   const form = $("#connection-form"),
     data = Object.fromEntries(new FormData(form));
   data.clearPassword = $("[name=clearPassword]", form).checked;
+  data.saveSqlDrafts = $("[name=saveSqlDrafts]", form).checked;
   try {
     data.properties = JSON.parse(data.properties || "{}");
   } catch (e) {
@@ -1022,6 +1084,11 @@ async function saveConnection(test = false) {
     feedback.innerHTML = `<span class="error-text">${esc(e.message)}</span>`;
     return;
   }
+  const previouslyEnabled = !!connection(payload.id)?.saveSqlDrafts;
+  if (!test && payload.saveSqlDrafts !== previouslyEnabled && !confirm(payload.saveSqlDrafts
+    ? "开启此连接的 SQL 草稿保存？SQL 可能包含口令、个人信息和业务数据。内容会加密保存在本机；拥有本机账户及密钥的人仍可读取。当前属于此连接的 SQL 标签也将保存。"
+    : "关闭此连接的 SQL 草稿保存？已保存草稿将被清除，当前页面文本保留；下载文件和备份不受影响。")) return;
+  rememberEditor();
   const btn = $(
     `[data-action=${test ? "test-connection" : "save-connection"}]`,
   );
@@ -1050,6 +1117,11 @@ async function saveConnection(test = false) {
         tab().catalog = payload.catalog || "";
         loadContext(tab());
       }
+      if (payload.saveSqlDrafts !== previouslyEnabled) {
+        if (payload.saveSqlDrafts) await drafts.load(state.selectedConnection);
+        else drafts.forget(state.selectedConnection);
+      }
+      drafts.schedule();
       $("#dialog").close();
       render();
       loadTree(state.selectedConnection, true);
@@ -1177,9 +1249,9 @@ async function closeTab(id) {
   rememberEditor();
   if (
     t.sql.trim() &&
-    t.savedSql !== t.sql &&
+    (t.savedSql !== t.sql || (t.type === "sql" && connection(t.connectionId)?.saveSqlDrafts)) &&
     !confirm(
-      `关闭「${t.name}」？SQL 文本不会自动保存。${t.session?.autoCommit === false ? "未提交事务将回滚。" : ""}`,
+      `关闭「${t.name}」？${t.type === "sql" && connection(t.connectionId)?.saveSqlDrafts ? "对应草稿也会删除；需要保留请先下载 SQL 文件。" : "SQL 文本不会自动保存。"}${t.session?.autoCommit === false ? "未提交事务将回滚。" : ""}`,
     )
   )
     return;
@@ -1196,12 +1268,14 @@ async function closeTab(id) {
     );
   abortRead(`context:${t.id}`); abortRead(`poll:${t.id}`);
   state.tabs = state.tabs.filter((x) => x !== t);
+  drafts.schedule();
   if (!state.tabs.length) newTab();
   else {
     if (state.activeTab === id)
       state.activeTab = state.tabs[state.tabs.length - 1].id;
     render();
   }
+  if (tab()?.restoreContext) loadContext(tab());
 }
 function saveSql() {
   rememberEditor();
@@ -1521,7 +1595,7 @@ const actions = {
   "save-connection": () => saveConnection(false),
   "delete-connection": async (el) => {
     const c = connection(el.dataset.id);
-    if (!confirm(`删除连接「${c.name}」？数据库本身不会被删除。`)) return;
+    if (!confirm(`删除连接「${c.name}」？${c.saveSqlDrafts ? "该连接的已存 SQL 草稿也将清除。" : ""}数据库本身不会被删除。`)) return;
     await api(`/connections/${c.id}`, { method: "DELETE" });
     state.connections = list(await api("/connections"));
     invalidateTree(c.id);
@@ -1533,6 +1607,8 @@ const actions = {
       .forEach((t) => { abortRead(`context:${t.id}`); t.connectionId = ""; });
     $("#dialog").close();
     render();
+    drafts.forget(c.id);
+    updateDraftStatus();
     toast("连接配置已删除。");
   },
   "toggle-connection": async (el) => {
@@ -1580,6 +1656,7 @@ const actions = {
     rememberEditor();
     state.activeTab = el.dataset.id;
     render();
+    if (tab()?.restoreContext) loadContext(tab());
   },
   "close-tab": (el) => closeTab(el.dataset.id),
   "execute-current": () => execute("CURRENT"),
@@ -1610,6 +1687,8 @@ const actions = {
   disconnect: () => disconnect(tab()),
   "open-sql": () => $("#sql-file").click(),
   "save-sql": saveSql,
+  "draft-status": draftStatusDialog,
+  "retry-drafts": () => { $("#dialog").close(); return drafts.save(tab().connectionId); },
   "result-tab": (el) => {
     tab().resultIndex =
       el.dataset.index === "messages" ? "messages" : Number(el.dataset.index);
@@ -1798,6 +1877,7 @@ document.addEventListener("change", (e) => {
         t.catalog = connection(target.value)?.catalog || "";
         render();
         loadContext(t);
+        drafts.schedule();
       }
     }
     renderTree();
@@ -1812,6 +1892,7 @@ document.addEventListener("change", (e) => {
     t.catalogs = [];
     render();
     if (target.value) loadContext(t);
+    drafts.schedule();
   }
   if (target.id === "tab-schema") t.schema = target.value;
   if (target.id === "tab-catalog") t.catalog = target.value;
@@ -1833,6 +1914,8 @@ document.addEventListener("input", (e) => {
     const t = tab();
     t.sql = e.target.value;
     $("#line-numbers").textContent = lineNumbers(t.sql);
+    updateHighlight();
+    drafts.schedule();
     updateCursor();
   }
   if (e.target.id === "object-search") {
@@ -1843,11 +1926,16 @@ document.addEventListener("input", (e) => {
 document.addEventListener(
   "scroll",
   (e) => {
-    if (e.target.id === "sql-editor")
-      $("#line-numbers").scrollTop = e.target.scrollTop;
+    if (e.target.id === "sql-editor") syncHighlightScroll();
   },
   true,
 );
+document.addEventListener("compositionstart", (e) => {
+  if (e.target.id === "sql-editor") { e.target.dataset.composing = "true"; updateHighlight(); }
+});
+document.addEventListener("compositionend", (e) => {
+  if (e.target.id === "sql-editor") { delete e.target.dataset.composing; updateHighlight(); }
+});
 document.addEventListener("keyup", (e) => {
   if (e.target.id === "sql-editor") updateCursor();
 });
@@ -1964,11 +2052,11 @@ $("#dialog").addEventListener("click", (e) => {
 window.addEventListener("beforeunload", (e) => {
   rememberEditor();
   if (
-    state.tabs.some(
+    drafts.dirty() || state.tabs.some(
       (t) =>
         busy(t) ||
         t.session?.autoCommit === false ||
-        (t.sql.trim() && t.savedSql !== t.sql),
+        (t.sql.trim() && t.savedSql !== t.sql && !drafts.saved(t)),
     )
   ) {
     e.preventDefault();
@@ -1986,7 +2074,17 @@ async function init() {
     state.drivers = list(drivers);
     state.connections = list(connections);
     state.selectedConnection = state.connections[0]?.id || "";
-    newTab();
+    const restored = await Promise.all(state.connections.filter(c => c.saveSqlDrafts).map(async c => ({connectionId: c.id, tabs: await drafts.load(c.id)})));
+    for (const workspace of restored) for (const draft of workspace.tabs) {
+      const c = connection(workspace.connectionId);
+      newTab({...draft, id: uid(), draftId: draft.id, restoreContext: true,
+        connectionId: c.id, schema: c.schema || "", catalog: c.catalog || ""}, true);
+    }
+    if (!state.tabs.length) newTab();
+    else { state.selectedConnection = tab().connectionId; render(); loadContext(tab()); }
+    if (restored.some(w => w.tabs.length)) toast("已恢复 SQL 草稿；数据库会话和事务未恢复，SQL 不会自动执行。");
+    if (restored.some(w => drafts.status(w.connectionId).error))
+      toast("有连接的 SQL 草稿读取失败，已有文件未覆盖。选择对应连接后，点击编辑器下方草稿状态查看说明。", true);
     if (state.selectedConnection) {
       state.expanded.add(state.selectedConnection);
       loadTree(state.selectedConnection);

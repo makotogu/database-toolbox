@@ -36,11 +36,13 @@ public class ConnectionService {
     private final DriverService drivers;
     private final Path file;
     private final EncryptedJsonFileStore<ConnectionCatalog> store;
+    private final SqlDrafts drafts;
 
     public ConnectionService(StoragePaths paths, ObjectMapper mapper, DriverService drivers) {
         this.paths = paths;
         this.mapper = mapper;
         this.drivers = drivers;
+        this.drafts = new SqlDrafts(paths, mapper);
         this.file = paths.configDir().resolve("connections-v2.enc");
         this.store = new EncryptedJsonFileStore<ConnectionCatalog>(file, paths.keyFile(), mapper,
                 new TypeReference<ConnectionCatalog>() { }, ConnectionCatalog::new);
@@ -75,6 +77,8 @@ public class ConnectionService {
             ConnectionCatalog catalog = readCatalog();
             ConnectionProfile existing = existing(catalog, request.id);
             ConnectionProfile next = prepare(request, existing, true);
+            // Clear before persisting opt-out. Failure is reported, never a false deletion success.
+            if (existing != null && existing.saveSqlDrafts && !next.saveSqlDrafts) drafts.clear(existing.id);
             if (existing != null) catalog.profiles.remove(existing);
             catalog.profiles.add(next);
             store.write(catalog);
@@ -87,8 +91,25 @@ public class ConnectionService {
         ConnectionCatalog catalog = readCatalog();
         ConnectionProfile existing = existing(catalog, id);
         if (existing == null) throw new AppException(HttpStatus.NOT_FOUND, "连接配置不存在");
+        drafts.clear(id);
         catalog.profiles.remove(existing);
         store.write(catalog);
+    }
+
+    public synchronized SqlDrafts.Workspace sqlDrafts(String id) {
+        ConnectionProfile profile = draftProfile(id);
+        return drafts.read(id, profile.sqlDraftEpoch);
+    }
+
+    public synchronized SqlDrafts.Workspace saveSqlDrafts(String id, SqlDrafts.Update request) {
+        ConnectionProfile profile = draftProfile(id);
+        return drafts.save(id, profile.sqlDraftEpoch, request);
+    }
+
+    private ConnectionProfile draftProfile(String id) {
+        ConnectionProfile profile = get(id);
+        if (!profile.saveSqlDrafts) throw new AppException(HttpStatus.CONFLICT, "此连接未开启 SQL 草稿保存，请先检查连接设置");
+        return profile;
     }
 
     public Map<String, Object> test(ConnectionProfile request) {
@@ -173,6 +194,10 @@ public class ConnectionService {
         next.dialectHint = trim(request.dialectHint);
         next.catalog = trim(request.catalog);
         next.schema = trim(request.schema);
+        next.saveSqlDrafts = request.saveSqlDrafts;
+        next.sqlDraftEpoch = next.saveSqlDrafts ?
+                (existing != null && existing.saveSqlDrafts && hasText(existing.sqlDraftEpoch)
+                        ? existing.sqlDraftEpoch : UUID.randomUUID().toString()) : null;
         next.legacyType = existing == null ? null : existing.legacyType;
         if (existing != null && existing.legacyFields != null) next.legacyFields.putAll(existing.legacyFields);
         if (request.properties != null) {
@@ -203,6 +228,7 @@ public class ConnectionService {
         result.dialectHint = source.dialectHint;
         result.catalog = source.catalog;
         result.schema = source.schema;
+        result.saveSqlDrafts = source.saveSqlDrafts;
         result.hasPassword = hasText(source.password);
         result.needsDriver = !hasText(source.driverId);
         result.legacyType = source.legacyType;
