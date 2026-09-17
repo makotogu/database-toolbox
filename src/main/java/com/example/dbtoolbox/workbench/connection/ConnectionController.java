@@ -20,4 +20,10 @@ public class ConnectionController {
         return ApiResponse.ok(null);
     }
     @GetMapping("/legacy") public ApiResponse<Map<String, Object>> legacy() { return ApiResponse.ok(connections.migrationStatus()); }
+    @GetMapping("/{id}/sql-drafts") public ApiResponse<SqlDrafts.Workspace> drafts(@PathVariable String id) {
+        return ApiResponse.ok(connections.sqlDrafts(id));
+    }
+    @PutMapping("/{id}/sql-drafts") public ApiResponse<SqlDrafts.Workspace> saveDrafts(@PathVariable String id, @RequestBody SqlDrafts.Update request) {
+        return ApiResponse.ok(connections.saveSqlDrafts(id, request));
+    }
 }

@@ -4,6 +4,10 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class ConnectionProfile {
+    public boolean saveSqlDrafts;
+    // Server-owned opt-in generation; never copied to the public profile.
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    public String sqlDraftEpoch;
     public String id;
     public String name;
     public String driverId;

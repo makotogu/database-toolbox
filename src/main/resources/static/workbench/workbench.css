@@ -592,7 +592,13 @@ kbd {
   color: #8a979c;
   user-select: none;
 }
-.sql-editor {
+.sql-editor-stack {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.sql-editor, .sql-highlight {
   display: block;
   flex: 1;
   min-width: 0;
@@ -612,6 +618,48 @@ kbd {
   white-space: pre;
   overflow: auto;
   background: transparent;
+  letter-spacing: normal;
+  font-variant-ligatures: none;
+  direction: ltr;
+  text-align: left;
+}
+.sql-editor {
+  position: relative;
+  height: 100%;
+  caret-color: #24464a;
+}
+.sql-highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  margin: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.sql-highlight[hidden] { display: none; }
+.sql-editor.highlighted { color: transparent; }
+.sql-editor::selection { background: #cee7f3; color: #24464a; }
+.sql-keyword { color: #6243a4; }
+.sql-string { color: #9b4726; }
+.sql-number { color: #145eb0; }
+.sql-comment { color: #65756b; }
+.sql-identifier { color: #086f77; }
+.draft-setting { padding-top: 8px; border-top: 1px solid var(--border); }
+.draft-setting .check-label { color: var(--text); font-size: 12px; }
+.form-field.draft-setting input[type="checkbox"] { width: auto; flex: 0 0 auto; }
+.editor-footer .draft-status {
+  padding: 0 4px;
+  min-height: 20px;
+  font: inherit;
+  color: var(--muted);
+  border: 0;
+  background: transparent;
+  white-space: nowrap;
+}
+.editor-footer .draft-status.error-text { color: #a33935; }
+@media (forced-colors: active) {
+  .sql-highlight { display: none; }
+  .sql-editor.highlighted { color: CanvasText; }
 }
 .sql-editor::placeholder {
   color: #7e9197;
