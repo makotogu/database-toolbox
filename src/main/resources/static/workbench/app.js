@@ -81,11 +81,34 @@ const state = {
   search: "",
   sidebarOpen: false,
 };
-let pollTimer;
+let pollTimer, polling = false;
+const readRequests = new Map();
+function beginRead(key) {
+  abortRead(key);
+  const controller = new AbortController();
+  const scope = { controller, current: () => readRequests.get(key) === scope };
+  scope.timer = setTimeout(() => controller.abort(), 15000);
+  readRequests.set(key, scope);
+  return scope;
+}
+function finishRead(key, scope) {
+  clearTimeout(scope.timer);
+  if (scope.current()) readRequests.delete(key);
+}
+function abortRead(key) {
+  const old = readRequests.get(key);
+  if (old) { clearTimeout(old.timer); old.controller.abort(); readRequests.delete(key); }
+}
+function invalidateTree(id) {
+  for (const key of readRequests.keys())
+    if (key === `tree:${id}` || key.startsWith(`objects:${id}:`)) abortRead(key);
+  for (const key of state.tree.keys())
+    if (key === id || key.startsWith(id + ":")) state.tree.delete(key);
+}
 let cellEditor;
 const tab = () => state.tabs.find((t) => t.id === state.activeTab);
 const connection = (id) => state.connections.find((c) => c.id === id);
-const busy = (t) => !!t?.submitting || activeStates.has(t?.execution?.state);
+const busy = (t) => !!t?.submitting || !!t?.cancelInFlight || !!t?.recovering || activeStates.has(t?.execution?.state);
 
 async function api(path, options = {}) {
   const opts = { ...options, headers: { ...options.headers } };
@@ -241,7 +264,7 @@ function renderConnectionTree(c) {
 function renderObjects(c, scope, key) {
   const data = state.tree.get(key);
   if (!data) return '<div class="skeleton">正在读取表与存过…</div>';
-  if (data.error) return `<div class="tree-error">${esc(data.error)}</div>`;
+  if (data.error) return `<div class="tree-error">${esc(data.error)}<br>${button("重试", "refresh-objects", null, "small", `data-id="${c.id}" data-key="${esc(key)}" data-catalog="${esc(scope.catalog || "")}" data-schema="${esc(scope.schema || "")}"`)}</div>`;
   let query = state.search.toLowerCase();
   const groups = [
     ["表与视图", "table", data.tables || [], data.tableError],
@@ -255,14 +278,18 @@ function renderObjects(c, scope, key) {
     .join("")}</div>`;
 }
 async function loadTree(id, refresh = false) {
+  if (refresh) invalidateTree(id);
   if (!refresh && state.tree.has(id)) return;
   state.tree.delete(id);
   renderTree();
+  const key = `tree:${id}`, scope = beginRead(key);
+  const options = { signal: scope.controller.signal };
   try {
     const [catalogs, schemas] = await Promise.all([
-      api(`/connections/${id}/objects?kind=catalogs`).catch(() => []),
-      api(`/connections/${id}/objects?kind=schemas`),
+      api(`/connections/${id}/objects?kind=catalogs`, options).catch((e) => { if (e.name === "AbortError") throw e; return []; }),
+      api(`/connections/${id}/objects?kind=schemas`, options),
     ]);
+    if (!scope.current() || !connection(id)) return;
     const scopes = list(schemas).map((s) => ({
       catalog: s.catalog || "",
       schema: s.name || s.schema || "",
@@ -286,8 +313,9 @@ async function loadTree(id, refresh = false) {
       loadObjects(id, scope, key);
     }
   } catch (e) {
-    state.tree.set(id, { error: e.message });
-  }
+    if (!scope.current()) return;
+    state.tree.set(id, { error: e.name === "AbortError" ? "读取超时，请重试" : e.message });
+  } finally { finishRead(key, scope); }
   renderTree();
 }
 async function loadObjects(id, scope, key, refresh = false) {
@@ -298,10 +326,25 @@ async function loadObjects(id, scope, key, refresh = false) {
     catalog: scope.catalog || "",
     schema: scope.schema || "",
   });
+  const requestKey = `objects:${key}`, request = beginRead(requestKey);
+  const options = { signal: request.controller.signal };
   const results = await Promise.allSettled([
-    api(`/connections/${id}/objects?kind=tables&${q}`),
-    api(`/connections/${id}/objects?kind=routines&${q}`),
+    api(`/connections/${id}/objects?kind=tables&${q}`, options),
+    api(`/connections/${id}/objects?kind=routines&${q}`, options),
   ]);
+  const current = request.current() && !!connection(id);
+  finishRead(requestKey, request);
+  if (!current) return;
+  const aborted = request.controller.signal.aborted || results.some(
+    (result) => result.status === "rejected" && result.reason?.name === "AbortError",
+  );
+  if (aborted) {
+    // A superseded request returned above; a current request was interrupted or timed out.
+    // Keep this distinct from a successful read with no objects, and allow an explicit retry.
+    state.tree.set(key, { error: "读取超时，请重试" });
+    renderTree();
+    return;
+  }
   const obj = {
     tables: results[0].status === "fulfilled" ? list(results[0].value) : [],
     routines: results[1].status === "fulfilled" ? list(results[1].value) : [],
@@ -314,34 +357,30 @@ async function loadObjects(id, scope, key, refresh = false) {
   renderTree();
 }
 async function loadContext(t) {
+  const connectionId = t.connectionId, key = `context:${t.id}`, scope = beginRead(key);
+  const fetchOptions = { signal: scope.controller.signal };
   try {
     const [schemas, catalogs] = await Promise.all([
-      api(`/connections/${t.connectionId}/objects?kind=schemas`).catch(
-        () => [],
-      ),
-      api(`/connections/${t.connectionId}/objects?kind=catalogs`).catch(
-        () => [],
-      ),
+      api(`/connections/${connectionId}/objects?kind=schemas`, fetchOptions).catch((e) => { if (e.name === "AbortError") throw e; return []; }),
+      api(`/connections/${connectionId}/objects?kind=catalogs`, fetchOptions).catch((e) => { if (e.name === "AbortError") throw e; return []; }),
     ]);
-    if (!state.tabs.includes(t)) return;
-    t.schemas = list(schemas);
-    t.catalogs = list(catalogs);
+    if (!scope.current() || !state.tabs.includes(t) || t.connectionId !== connectionId) return;
+    t.schemas = list(schemas); t.catalogs = list(catalogs);
     if (tab() === t) {
-      const s = $("#tab-schema"),
-        c = $("#tab-catalog");
+      const s = $("#tab-schema"), c = $("#tab-catalog");
       if (s) s.innerHTML = options(t.schemas, t.schema, "默认 schema");
       if (c) c.innerHTML = options(t.catalogs, t.catalog, "默认 catalog");
     }
   } catch (e) {
-    /* Context pickers remain available with the saved connection defaults. */
-  }
+    if (scope.current() && e.name !== "AbortError") report(e);
+  } finally { finishRead(key, scope); }
 }
 function renderTab(t) {
   if (!t) return;
   const body = $("#tab-body");
   body.classList.toggle("routine-tab", t.type === "routine");
   const connected = t.session;
-  body.innerHTML = `<div class="context-bar"><span class="context-label">连接</span><select id="tab-connection" aria-label="标签数据库连接" ${busy(t) || t.session ? "disabled" : ""}>${options(state.connections, t.connectionId, "选择连接")}</select><span class="context-label">catalog</span><select id="tab-catalog" aria-label="数据库 catalog" ${busy(t) || t.session ? "disabled" : ""}>${options(t.catalogs, t.catalog, "默认 catalog")}</select><span class="context-label">schema</span><select id="tab-schema" class="context-schema" aria-label="数据库 schema" ${busy(t) || t.session ? "disabled" : ""}>${options(t.schemas, t.schema, "默认 schema")}</select><span class="spacer"></span><span class="session-badge"><i class="dot ${connected ? "online" : ""}"></i>${connected ? stateLabels[connected.state] || connected.state : "执行时建立会话"}</span>${connected ? button("断开", "disconnect", null, "ghost small", busy(t) ? "disabled" : "") : ""}</div>${t.type === "table" ? tableToolbar(t) : ""}${t.type === "routine" ? routinePanel(t) : ""}${t.type !== "table" ? editorToolbar(t) + editorMarkup(t) : `<div class="preview-sql"><span>实际 SQL</span><code id="preview-sql">${esc(t.previewSql || "点击「读取数据」生成查询。")}${t.previewBindings?.length ? `<br><span class="muted">输入参数（按占位符顺序）：${esc(JSON.stringify(t.previewBindings))}</span>` : ""}</code></div>`}<section id="results" class="results-pane" aria-label="执行结果"></section>`;
+  body.innerHTML = `<div class="context-bar"><span class="context-label">连接</span><select id="tab-connection" aria-label="标签数据库连接" ${busy(t) || t.session ? "disabled" : ""}>${options(state.connections, t.connectionId, "选择连接")}</select><span class="context-label">catalog</span><select id="tab-catalog" aria-label="数据库 catalog" ${busy(t) || t.session ? "disabled" : ""}>${options(t.catalogs, t.catalog, "默认 catalog")}</select><span class="context-label">schema</span><select id="tab-schema" class="context-schema" aria-label="数据库 schema" ${busy(t) || t.session ? "disabled" : ""}>${options(t.schemas, t.schema, "默认 schema")}</select><span class="spacer"></span><span class="session-badge"><i class="dot ${connected ? "online" : ""}"></i>${connected ? esc(stateLabels[connected.state] || connected.state) : "执行时建立会话"}</span>${connected ? button("断开", "disconnect", null, "ghost small", busy(t) ? "disabled" : "") : ""}${connected?.state === "BROKEN" || connected?.resourceReleased ? button(connected.recoveryPending ? "正在回收…" : "恢复会话", "recover-session", null, "small", t.recovering || connected.recoveryPending ? "disabled" : "") : ""}</div>${t.type === "table" ? tableToolbar(t) : ""}${t.type === "routine" ? routinePanel(t) : ""}${t.type !== "table" ? editorToolbar(t) + editorMarkup(t) : `<div class="preview-sql"><span>实际 SQL</span><code id="preview-sql">${esc(t.previewSql || "点击「读取数据」生成查询。")}${t.previewBindings?.length ? `<br><span class="muted">输入参数（按占位符顺序）：${esc(JSON.stringify(t.previewBindings))}</span>` : ""}</code></div>`}<section id="results" class="results-pane" aria-label="执行结果"></section>`;
   if (t.type !== "table") {
     const ed = $("#sql-editor");
     ed.value = t.sql;
@@ -359,7 +398,8 @@ function editorToolbar(t) {
   return `<div class="toolbar">${button('执行当前 <kbd class="shortcut-key">⌘ ↵</kbd>', "execute-current", "play", "primary", disabled)}${button("选区", "execute-selection", null, "", disabled)}${button("整块", "execute-block", null, "", disabled)}${button("脚本", "execute-script", null, "", disabled)}<span class="divider"></span>${button("EXPLAIN", "explain", "branch", "", disabled)}${button("实际分析", "analyze", null, "", disabled + ' title="EXPLAIN ANALYZE 会真正执行语句"')}${button("取消", "cancel", "stop", "ghost", activeStates.has(t.execution?.state) ? "" : "disabled")}<span class="spacer"></span>${transactionControls(t)}<span class="divider"></span>${button("", "open-sql", "open", "ghost icon-btn", 'title="打开 SQL 文件" aria-label="打开 SQL 文件"')}${button("", "save-sql", "save", "ghost icon-btn", 'title="保存 SQL 文件" aria-label="保存 SQL 文件"')}</div>`;
 }
 function transactionControls(t) {
-  return `<label class="check-label transaction-label"><input id="auto-commit" type="checkbox" ${t.session?.autoCommit !== false ? "checked" : ""} ${busy(t) ? "disabled" : ""}>自动提交</label>${button("提交", "commit", "check", "ghost", !t.session || t.session.autoCommit || busy(t) ? "disabled" : "")}${button("回滚", "rollback", "undo", "ghost", !t.session || t.session.autoCommit || busy(t) ? "disabled" : "")}`;
+  const unavailable = busy(t) || t.session?.state === "BROKEN" || t.session?.state === "CLOSED" || t.session?.resourceReleased;
+  return `<label class="check-label transaction-label"><input id="auto-commit" type="checkbox" ${t.session?.autoCommit !== false ? "checked" : ""} ${unavailable ? "disabled" : ""}>自动提交</label>${button("提交", "commit", "check", "ghost", !t.session || t.session.autoCommit || unavailable ? "disabled" : "")}${button("回滚", "rollback", "undo", "ghost", !t.session || t.session.autoCommit || unavailable ? "disabled" : "")}`;
 }
 function editorMarkup(t) {
   return `<section class="editor-pane" aria-label="SQL 编辑器"><div class="editor"><div id="line-numbers" class="line-numbers" aria-hidden="true">${lineNumbers(t.sql)}</div><textarea id="sql-editor" class="sql-editor" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="SQL 编辑区" placeholder="-- 在这里编写 SQL\n-- ⌘ / Ctrl + Enter 执行当前语句\n-- 选择一段 SQL 执行选区，或完整执行数据库代码块"></textarea></div><div class="editor-footer"><span id="cursor-position">行 1，列 1</span><span class="spacer"></span><span>${t.type === "routine" ? "JDBC 调用与原生 SQL" : "SQL"}</span><span>UTF-8</span><span>拖动右下角调整高度</span></div></section>`;
@@ -586,7 +626,7 @@ function renderStatus() {
     el = $("#status-bar");
   if (!el) return;
   const s = t?.session;
-  el.innerHTML = `<span>${icon("database")}${esc(connection(t?.connectionId)?.name || "未选择连接")}</span><span class="session-status">${s ? stateLabels[s.state] || s.state : "会话未建立"}</span><span class="${s?.autoCommit === false ? "warning" : ""}">${s?.autoCommit === false ? "手动提交" : "自动提交"}</span><span class="spacer"></span>${t?.execution ? `<span class="status-message">${esc(stateLabels[t.execution.state] || t.execution.state)}</span><span>${icon("clock")}${duration(t.execution.elapsedMs)}</span>` : ""}<span class="optional">结果与 SQL 不自动保存到磁盘</span>`;
+  el.innerHTML = `<span>${icon("database")}${esc(connection(t?.connectionId)?.name || "未选择连接")}</span><span class="session-status">${s ? esc(stateLabels[s.state] || s.state) : "会话未建立"}</span><span class="${s?.autoCommit === false ? "warning" : ""}">${s?.autoCommit === false ? "手动提交" : "自动提交"}</span><span class="spacer"></span>${t?.pollError ? `<span class="warning">${esc(t.pollError)}</span>` : ""}${t?.execution ? `<span class="status-message">${esc(stateLabels[t.execution.state] || t.execution.state)}</span><span>${icon("clock")}${duration(t.execution.elapsedMs)}</span>` : ""}<span class="optional">结果与 SQL 不自动保存到磁盘</span>`;
 }
 async function ensureSession(t) {
   if (t.session && ["BROKEN", "CLOSED"].includes(t.session.state))
@@ -618,6 +658,8 @@ async function disconnect(t) {
   )
     return;
   await api(`/sessions/${t.session.id}`, { method: "DELETE" });
+  abortRead(`poll:${t.id}`);
+  t.pollVersion = (t.pollVersion || 0) + 1;
   t.session = null;
   if (t === tab()) {
     rememberEditor();
@@ -628,6 +670,7 @@ async function execute(mode, extra = {}) {
   const t = tab();
   if (!t || busy(t)) return;
   rememberEditor();
+  const sourceSql = t.sql;
   const request = {
     mode,
     sql: t.sql,
@@ -705,7 +748,7 @@ async function execute(mode, extra = {}) {
     const previousExecution = t.execution;
     t.execution = await api("/executions", { method: "POST", body: request });
     t.sourceLineOffset = sourceLineOffset;
-    t.executionSourceSql = t.sql;
+    t.executionSourceSql = sourceSql;
     if (previousExecution?.id && !activeStates.has(previousExecution.state))
       api(`/executions/${previousExecution.id}`, { method: "DELETE" }).catch(
         () => {},
@@ -725,60 +768,96 @@ async function execute(mode, extra = {}) {
       if (t.execution.statements?.length)
         t.previewSql = t.execution.statements.map((s) => s.sql).join("\n");
     }
-    if (t === tab()) render();
+    if (t === tab()) renderExecutionChange(t);
     startPolling();
   } catch (e) {
     t.localError = e.message;
     throw e;
   } finally {
     t.submitting = false;
-    if (t === tab()) render();
+    if (t === tab()) renderExecutionChange(t);
   }
 }
 function startPolling() {
-  if (pollTimer) return;
+  if (pollTimer || polling) return;
   pollTimer = setTimeout(pollExecutions, 350);
 }
 async function pollExecutions() {
   pollTimer = null;
-  const pending = state.tabs.filter(
-    (t) =>
-      !t.cellSaving && t.execution?.id && activeStates.has(t.execution.state),
-  );
-  await Promise.all(
-    pending.map(async (t) => {
+  if (polling) return;
+  polling = true;
+  try {
+    const pending = state.tabs.filter((t) => !t.cellSaving && !t.cancelInFlight && t.execution?.id && (activeStates.has(t.execution.state) || t.recoveryWaiting));
+    await Promise.all(pending.map(async (t) => {
+      const id = t.execution.id, sessionId = t.session?.id, version = t.pollVersion || 0;
+      const key = `poll:${t.id}`, scope = beginRead(key);
+      const current = () => scope.current() && state.tabs.includes(t) && t.execution?.id === id && t.session?.id === sessionId && (t.pollVersion || 0) === version;
       try {
-        t.execution = await api(`/executions/${t.execution.id}`);
-        if (!activeStates.has(t.execution.state)) {
+        const execution = await api(`/executions/${id}`, { signal: scope.controller.signal });
+        if (!current()) return;
+        const wasBroken = t.session?.state === "BROKEN";
+        t.execution = execution; t.pollError = null;
+        if (sessionId) {
           try {
-            t.session = await api(`/sessions/${t.session.id}`);
-            syncSessionContext(t);
+            const session = await api(`/sessions/${sessionId}`, { signal: scope.controller.signal });
+            if (!current()) return;
+            t.session = session; t.recoveryWaiting = session.recoveryPending && !session.resourceReleased; syncSessionContext(t);
           } catch (e) {
+            if (!current()) return;
+            if (e.name === "AbortError") throw e;
             if (t.session) t.session.state = "BROKEN";
           }
-          if (t.execution.state === "FAILED" && !allResults(t).length)
-            t.resultIndex = "messages";
-          if (t === tab()) {
-            rememberEditor();
-            render();
-          }
-        } else if (t === tab()) {
-          renderResults(t);
-          renderStatus();
+        }
+        if (t.execution.state === "FAILED" && !allResults(t).length) t.resultIndex = "messages";
+        if (t === tab()) {
+          if (!activeStates.has(t.execution.state) || wasBroken !== (t.session?.state === "BROKEN")) renderExecutionChange(t);
+          else { renderResults(t); renderStatus(); }
         }
       } catch (e) {
-        t.pollError = e.message;
-        t.execution.state = "OUTCOME_UNKNOWN";
-        t.execution.message = `无法继续读取执行状态：${e.message}。请核对数据库状态。`;
-        if (t === tab()) {
-          rememberEditor();
-          render();
-        }
-      }
-    }),
-  );
-  if (state.tabs.some((t) => activeStates.has(t.execution?.state)))
-    pollTimer = setTimeout(pollExecutions, 500);
+        if (!current()) return;
+        // A failed read does not stop JDBC or authorize a new write; retain the active state.
+        t.pollError = "暂时无法读取状态，正在重试；数据库操作可能仍在执行";
+        if (t === tab()) renderStatus();
+      } finally { finishRead(key, scope); }
+    }));
+  } finally {
+    polling = false;
+    if (state.tabs.some((t) => activeStates.has(t.execution?.state) || t.recoveryWaiting)) startPolling();
+  }
+}
+function renderExecutionChange(t) {
+  if (t !== tab()) return;
+  const editor = $("#sql-editor");
+  const focused = document.activeElement === editor;
+  rememberEditor();
+  // Update only this tab, preserving the navigation tree and the editor node/focus/selection.
+  renderTab(t);
+  if (editor && $("#sql-editor")) {
+    $("#sql-editor").replaceWith(editor);
+    if (focused) editor.focus({ preventScroll: true });
+  }
+  renderStatus();
+  const tabButton = $$('[data-action="select-tab"]').find((b) => b.dataset.id === t.id);
+  if (!busy(t)) tabButton?.querySelector(".loading-dot")?.remove();
+}
+async function recoverSession(t) {
+  if (!t?.session || t.recovering) return;
+  const oldId = t.session.id;
+  t.recovering = true;
+  try {
+    const session = await api(`/sessions/${oldId}/recover`, { method: "POST" });
+    if (!state.tabs.includes(t) || t.session?.id !== oldId) return;
+    t.session = session; t.recoveryWaiting = !session.resourceReleased;
+    if (!session.resourceReleased || activeStates.has(t.execution?.state)) {
+      toast("会话资源尚未释放，请等待后重试。数据库结果仍需核实。", true);
+      startPolling(); return;
+    }
+    if (!confirm("旧会话已关闭。重新连接不会恢复事务或重跑 SQL；请自行核实旧操作结果。继续？")) return;
+    abortRead(`poll:${t.id}`); t.pollVersion = (t.pollVersion || 0) + 1;
+    t.session = null;
+    await ensureSession(t);
+    toast("新会话已建立；没有重新执行旧 SQL。");
+  } finally { t.recovering = false; if (t === tab()) renderExecutionChange(t); }
 }
 async function transaction(action, autoCommit) {
   const t = tab();
@@ -1115,6 +1194,7 @@ async function closeTab(id) {
     await api(`/executions/${t.execution.id}`, { method: "DELETE" }).catch(
       () => {},
     );
+  abortRead(`context:${t.id}`); abortRead(`poll:${t.id}`);
   state.tabs = state.tabs.filter((x) => x !== t);
   if (!state.tabs.length) newTab();
   else {
@@ -1444,13 +1524,13 @@ const actions = {
     if (!confirm(`删除连接「${c.name}」？数据库本身不会被删除。`)) return;
     await api(`/connections/${c.id}`, { method: "DELETE" });
     state.connections = list(await api("/connections"));
-    state.tree.delete(c.id);
+    invalidateTree(c.id);
     state.expanded.delete(c.id);
     if (state.selectedConnection === c.id)
       state.selectedConnection = state.connections[0]?.id || "";
     state.tabs
       .filter((t) => t.connectionId === c.id && !t.session)
-      .forEach((t) => (t.connectionId = ""));
+      .forEach((t) => { abortRead(`context:${t.id}`); t.connectionId = ""; });
     $("#dialog").close();
     render();
     toast("连接配置已删除。");
@@ -1483,12 +1563,17 @@ const actions = {
   "refresh-tree": async () => {
     const id = state.selectedConnection;
     if (!id) return;
-    for (const key of state.tree.keys())
-      if (key === id || key.startsWith(id + ":")) state.tree.delete(key);
+    invalidateTree(id);
     state.expanded.add(id);
     await loadTree(id, true);
   },
   "refresh-connection": (el) => loadTree(el.dataset.id, true),
+  "refresh-objects": (el) => loadObjects(
+    el.dataset.id,
+    { catalog: el.dataset.catalog, schema: el.dataset.schema },
+    el.dataset.key,
+    true,
+  ),
   "open-object": (el) =>
     openObject(el.dataset.id, JSON.parse(el.dataset.object)),
   "select-tab": (el) => {
@@ -1504,18 +1589,22 @@ const actions = {
   explain: () => execute("EXPLAIN", { analyze: false }),
   analyze: () => execute("EXPLAIN", { analyze: true }),
   cancel: async () => {
-    const t = tab();
-    if (!t?.execution?.id) return;
-    const result = await api(`/executions/${t.execution.id}/cancel`, {
-      method: "POST",
-    });
-    if (result?.state) t.execution = result;
-    else t.execution.state = "CANCEL_REQUESTED";
-    renderResults(t);
-    renderStatus();
-    startPolling();
-    toast("已请求取消，正在等待数据库确认。");
+    const t = tab(), id = t?.execution?.id;
+    if (!id || t.cancelInFlight) return;
+    t.cancelInFlight = true; t.pollVersion = (t.pollVersion || 0) + 1;
+    abortRead(`poll:${t.id}`);
+    try {
+      const result = await api(`/executions/${id}/cancel`, { method: "POST" });
+      if (!state.tabs.includes(t) || t.execution?.id !== id) return;
+      if (result?.state) t.execution = result;
+      toast("已请求取消，正在等待数据库确认。");
+    } finally {
+      t.cancelInFlight = false;
+      if (t === tab()) renderExecutionChange(t);
+      startPolling();
+    }
   },
+  "recover-session": () => recoverSession(tab()),
   commit: () => transaction("COMMIT"),
   rollback: () => transaction("ROLLBACK"),
   disconnect: () => disconnect(tab()),
@@ -1715,6 +1804,7 @@ document.addEventListener("change", (e) => {
   }
   if (target.id === "tab-connection") {
     rememberEditor();
+    abortRead(`context:${t.id}`);
     t.connectionId = target.value;
     t.schema = connection(target.value)?.schema || "";
     t.catalog = connection(target.value)?.catalog || "";

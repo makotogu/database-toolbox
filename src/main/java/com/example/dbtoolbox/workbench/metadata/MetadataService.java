@@ -165,7 +165,7 @@ public class MetadataService {
         for (int i = 0; i < parameters.size(); i++) parameters.get(i).put("position", i + 1);
         String definition = null;
         try { definition = routineDefinition(connection, catalog, schema, name, routineType, specificName, warnings); }
-        catch (SQLException ex) { warnings.add("无法读取定义（可能未适配或权限不足）：" + ex.getMessage()); }
+        catch (SQLException ex) { warnings.add("无法读取定义（可能未适配或权限不足）：" + com.example.dbtoolbox.common.ErrorMessages.safe(ex)); }
         if (definition == null) warnings.add("定义不可用；参数仍可查看，也可直接在编辑器编写原生调用");
         boolean returns = parameters.stream().anyMatch(p -> "RETURN".equals(p.get("mode")));
         int count = (int) parameters.stream().filter(p -> !"RETURN".equals(p.get("mode"))).count();
@@ -235,7 +235,7 @@ public class MetadataService {
     private static boolean optionalSame(String expected, String actual) { return expected == null || expected.equals(actual); }
     private static String optionalString(ResultSet rs, String column) { try { return rs.getString(column); } catch (SQLException ex) { return null; } }
     private static boolean unsupported(SQLException ex) { return ex instanceof SQLFeatureNotSupportedException || "0A000".equals(ex.getSQLState()); }
-    private static AppException metadataError(String action, SQLException ex) { return new AppException(action + "失败 [" + ex.getSQLState() + "]：" + ex.getMessage()); }
+    private static AppException metadataError(String action, SQLException ex) { return new AppException(action + "失败：" + com.example.dbtoolbox.common.ErrorMessages.safe(ex)); }
     private static String emptyToNull(String value) { return value == null || value.isEmpty() ? null : value; }
     private static void requireName(String name) { if (name == null || name.isEmpty()) throw new AppException("对象名称不能为空"); }
     private static Map<String, Object> row(Object... values) {

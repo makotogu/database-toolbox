@@ -3,6 +3,7 @@ package com.example.dbtoolbox.workbench.connection;
 import com.example.dbtoolbox.common.AppException;
 import com.example.dbtoolbox.common.EncryptedJsonFileStore;
 import com.example.dbtoolbox.common.StoragePaths;
+import com.example.dbtoolbox.common.PrivateFiles;
 import com.example.dbtoolbox.workbench.driver.DriverProfile;
 import com.example.dbtoolbox.workbench.driver.DriverService;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -109,7 +110,7 @@ public class ConnectionService {
             result.put("driverVersion", metadata.getDriverVersion());
         } catch (AppException ex) {
             result.put("success", false);
-            result.put("message", ex.getMessage());
+            result.put("message", com.example.dbtoolbox.common.ErrorMessages.redact(ex.getMessage()));
         } catch (SQLException ex) {
             result.put("success", false);
             result.put("message", "读取数据库信息失败（SQLState " + ex.getSQLState() + "，错误码 " + ex.getErrorCode() + "）");
@@ -231,6 +232,7 @@ public class ConnectionService {
         try { catalog = store.read(); }
         catch (AppException ex) { throw new AppException("连接配置损坏或密钥不匹配，原文件已保留，请从备份恢复"); }
         if (catalog == null || catalog.version != 2 || catalog.profiles == null) throw new AppException("不支持或已损坏的连接配置格式，原文件已保留");
+        store.upgradeEncryption();
         return catalog;
     }
 
@@ -292,9 +294,10 @@ public class ConnectionService {
         }
         try {
             Path backup = paths.root().resolve("migration-backups/legacy-v1");
-            Files.createDirectories(backup);
-            Files.copy(legacy, backup.resolve("datasources.enc"), StandardCopyOption.REPLACE_EXISTING);
-            Files.copy(paths.keyFile(), backup.resolve("master.key"), StandardCopyOption.REPLACE_EXISTING);
+            PrivateFiles.directory(backup.getParent());
+            PrivateFiles.directory(backup);
+            PrivateFiles.backup(legacy, backup.resolve("datasources.enc"));
+            PrivateFiles.backup(paths.keyFile(), backup.resolve("master.key"));
         } catch (IOException ex) {
             throw new AppException("备份旧配置失败，迁移已停止；原文件已保留");
         }

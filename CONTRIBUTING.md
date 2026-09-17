@@ -66,6 +66,8 @@ TOOLBOX_PLAYWRIGHT_PATH="$TASK_UI/node_modules/playwright" \
 
 已有 Chrome 时可通过 `TOOLBOX_CHROME_PATH` 指定可执行文件，省去 Chromium 下载；`TOOLBOX_UI_SCREENSHOT` 指定截图路径，默认 `/tmp/toolbox-cell-editor.png`。脚本新建并清理独立 H2 内存库、连接和会话，仍应在临时工作台实例运行。
 
+异步状态回归可直接运行 `node scripts/test-async-ui.cjs`，不需要第三方 Node 依赖。同样的 Playwright 环境可运行 `scripts/smoke-hardening-ui.cjs`，检查连接切换、取消旧响应、编辑器焦点和失效会话恢复；它创建独立 H2 夹具，默认截图 `/tmp/toolbox-hardening-ui.png`。逻辑测试不能替代浏览器检查。第一批 Issue #2 的实际记录见 [安全边界与可靠性验收](notes/features/ISSUE_2_HARDENING.md)。
+
 可视化单元格修改至少检查：点击选中与 Enter/双击打开、普通字段保存、NULL 与空字符串、只读字段说明、冲突失败保留输入、手动提交/回滚后刷新。检查文字和值经过转义，不把数据库内容插入可执行 HTML。
 
 不具备某数据库或平台时，明确写“未验证”，不要以 H2 或源码推断替代厂商实测。

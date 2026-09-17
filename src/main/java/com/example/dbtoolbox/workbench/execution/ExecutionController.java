@@ -15,6 +15,7 @@ public class ExecutionController {
     @PostMapping("/sessions")public ApiResponse<SessionService.Session> create(@RequestBody SessionRequest request){return ApiResponse.ok(sessions.create(request.connectionId,request.schema,request.catalog));}
     @GetMapping("/sessions/{id}")public ApiResponse<SessionService.Session> session(@PathVariable String id){return ApiResponse.ok(sessions.get(id));}
     @DeleteMapping("/sessions/{id}")public ApiResponse<Void> close(@PathVariable String id){sessions.close(id);return ApiResponse.ok(null);}
+    @PostMapping("/sessions/{id}/recover")public ApiResponse<SessionService.Session> recover(@PathVariable String id){return ApiResponse.ok(sessions.recover(id));}
     @PostMapping("/sessions/{id}/transaction")public ApiResponse<SessionService.Session> transaction(@PathVariable String id,@RequestBody TransactionRequest request){return ApiResponse.ok(sessions.transaction(id,request.action,request.autoCommit));}
     @PostMapping("/executions/prepare")public ApiResponse<ExecutionService.Plan> prepare(@RequestBody ExecutionRequest request){return ApiResponse.ok(executions.prepare(request));}
     @PostMapping("/executions")public ApiResponse<ExecutionRecord> submit(@RequestBody ExecutionRequest request){return ApiResponse.ok(executions.submit(request));}

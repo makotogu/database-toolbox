@@ -70,6 +70,23 @@ class DriverServiceTest {
         drivers.delete(profile.id);
     }
 
+    @Test void catalogWritesRestoreOwnerOnlyPermissionsAndRejectSymlinkTargets() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(Files.getFileStore(temporary).supportsFileAttributeView("posix"));
+        DriverProfile profile = drivers.importFiles(new MultipartFile[]{h2()}, "catalog permissions", null);
+        Path catalog = paths.configDir().resolve("drivers-v2.json");
+        Files.setPosixFilePermissions(paths.configDir(), java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+        drivers.delete(profile.id);
+        assertEquals("rwx------", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(paths.configDir())));
+        assertEquals("rw-------", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(catalog)));
+        Path original = temporary.resolve("original-catalog.json");
+        Files.move(catalog, original);
+        byte[] before = Files.readAllBytes(original);
+        Files.createSymbolicLink(catalog, original);
+        assertThrows(AppException.class, () -> drivers.importFiles(new MultipartFile[]{h2()}, "symlink catalog", null));
+        assertTrue(Files.isSymbolicLink(catalog));
+        assertArrayEquals(before, Files.readAllBytes(original));
+    }
+
     @Test void badImportAndTraversalAreRejectedWithoutProfiles() throws Exception {
         assertThrows(AppException.class, () -> drivers.importFiles(new MultipartFile[]{new MockMultipartFile("files", "../evil.jar", "application/java-archive", new byte[]{1})}, null, null));
         assertThrows(AppException.class, () -> drivers.importFiles(new MultipartFile[]{new MockMultipartFile("files", "broken.jar", "application/java-archive", new byte[]{1})}, null, null));
@@ -176,6 +193,13 @@ class DriverServiceTest {
         } finally { Thread.currentThread().setContextClassLoader(previous); ((java.net.URLClassLoader) caller).close(); }
     }
 
+    @Test void driverThatDoesNotConfirmCloseKeepsItsLease() throws Exception {
+        DriverProfile profile=drivers.importFiles(fakeDriver("unconfirmed",false),"unconfirmed close",null);
+        Connection c=drivers.open(profile.id,"jdbc:fake:test",new Properties());c.close();
+        assertFalse(c.isClosed());
+        assertTrue(assertThrows(AppException.class,()->drivers.delete(profile.id)).getMessage().contains("活动会话"));
+    }
+
     private MockMultipartFile h2() throws Exception {
         Path jar = Paths.get(org.h2.Driver.class.getProtectionDomain().getCodeSource().getLocation().toURI());
         return new MockMultipartFile("files", "h2.jar", "application/java-archive", Files.readAllBytes(jar));
@@ -187,7 +211,7 @@ class DriverServiceTest {
         String implementation = "import java.sql.*;import java.util.*;import java.lang.reflect.*;import java.util.logging.*;import java.io.*;" +
                 "public class ContextDriver implements Driver {" +
                 "static void check(){if(Thread.currentThread().getContextClassLoader()!=ContextDriver.class.getClassLoader())throw new IllegalStateException(\"wrong TCCL\");}" +
-                "static Object make(Class type,Object connection,Object statement){return Proxy.newProxyInstance(ContextDriver.class.getClassLoader(),new Class[]{type},(p,m,a)->{check();String n=m.getName();" +
+                "static Object make(Class type,Object connection,Object statement){final boolean[] closed={false};return Proxy.newProxyInstance(ContextDriver.class.getClassLoader(),new Class[]{type},(p,m,a)->{check();String n=m.getName();" +
                 "if(n.equals(\"unwrap\"))return p;if(n.equals(\"isWrapperFor\"))return true;" +
                 "if(n.equals(\"getConnection\"))return connection;if(n.equals(\"getStatement\"))return statement;" +
                 "if(n.equals(\"getDatabaseProductName\"))return \"context\";if(n.equals(\"getString\"))return \"context-value\";" +
@@ -198,7 +222,7 @@ class DriverServiceTest {
                 "if(n.equals(\"executeQuery\")||n.equals(\"getResultSet\"))return make(ResultSet.class,connection,p);" +
                 "if(n.equals(\"getBinaryStream\"))return new InputStream(){public int read(){check();return 42;}public void close(){check();}};" +
                 "if(n.equals(\"getCharacterStream\"))return new Reader(){public int read(char[] c,int o,int l){check();c[o]='x';return 1;}public void close(){check();}};" +
-                "if(n.equals(\"next\")||n.equals(\"execute\"))return true;if(n.equals(\"isClosed\"))return false;return null;});}" +
+                "if(n.equals(\"next\")||n.equals(\"execute\"))return true;if(n.equals(\"close\")||n.equals(\"abort\")){closed[0]=true;return null;}if(n.equals(\"isClosed\"))return closed[0];return null;});}" +
                 "public Connection connect(String url,Properties p){check();return (Connection)make(Connection.class,null,null);}public boolean acceptsURL(String u){return true;}" +
                 "public DriverPropertyInfo[] getPropertyInfo(String u,Properties p){return new DriverPropertyInfo[0];}public int getMajorVersion(){return 1;}public int getMinorVersion(){return 0;}public boolean jdbcCompliant(){return false;}public Logger getParentLogger(){return Logger.getGlobal();}}";
         Files.write(source, implementation.getBytes(StandardCharsets.UTF_8));
