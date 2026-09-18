@@ -70,6 +70,8 @@ TOOLBOX_PLAYWRIGHT_PATH="$TASK_UI/node_modules/playwright" \
 
 SQL 编辑器检查使用 `node scripts/test-sql-editor.cjs` 和 `node scripts/smoke-sql-editor-ui.cjs`，后者沿用上面的 Playwright 环境变量、独立 H2 夹具及截图配置。覆盖高亮与选区、按连接选择的草稿保存、隐私确认、失败重试、多页面冲突和清除；记录见 [SQL 编辑器验收](notes/features/SQL_EDITOR_DRAFTS.md)。
 
+连接向导检查：`node scripts/test-connection-fields.cjs` 与 `node scripts/smoke-onboarding-ui.cjs`。多条件过滤检查：先读 `node scripts/smoke-table-filters.cjs --help`，再使用相同 Playwright 环境运行；默认创建独立 H2 夹具，可显式提供一次性 MySQL/PostgreSQL 参数。启动脚本检查：先读 `python3 scripts/verify-launcher.py --help`，再指定测试 JAR 和 JDK 8；它创建临时目录并启动/停止自己的进程。测试依赖仅用于开发，不能成为最终用户的运行要求。
+
 可视化单元格修改至少检查：点击选中与 Enter/双击打开、普通字段保存、NULL 与空字符串、只读字段说明、冲突失败保留输入、手动提交/回滚后刷新。检查文字和值经过转义，不把数据库内容插入可执行 HTML。
 
 不具备某数据库或平台时，明确写“未验证”，不要以 H2 或源码推断替代厂商实测。
