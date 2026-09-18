@@ -89,6 +89,13 @@ public final class SqlDialect {
     public static PreviewQuery previewSql(Connection connection, String hint, String catalog, String schema,
                                           String table, List<Map<String, Object>> filters, String orderBy,
                                           boolean descending, int offset, int limit) throws SQLException {
+        return previewSql(connection, hint, catalog, schema, table, filters, "ALL", orderBy, descending, offset, limit);
+    }
+
+    public static PreviewQuery previewSql(Connection connection, String hint, String catalog, String schema, String table,
+                                          List<Map<String, Object>> filters, String filterMatch, String orderBy,
+                                          boolean descending, int offset, int limit) throws SQLException {
+        if (!"ALL".equals(filterMatch) && !"ANY".equals(filterMatch)) throw new AppException("筛选匹配方式必须为 ALL 或 ANY");
         if (offset < 0 || limit < 1 || limit > 1000) throw new AppException("预览 offset 必须非负，limit 必须介于 1 和 1000");
         catalog = metadataCatalog(connection, catalog);
         DatabaseMetaData md = connection.getMetaData();
@@ -117,7 +124,7 @@ public final class SqlDialect {
             if (value == null && "=".equals(operator)) operator = "IS NULL";
             if (value == null && ("!=".equals(operator) || "<>".equals(operator))) operator = "IS NOT NULL";
             if (operator.contains("LIKE") && !textType(columns.get(column))) throw new AppException("LIKE 只支持文本字段");
-            sql.append(firstFilter ? " WHERE " : " AND ").append(quote(connection, column)).append(' ').append(operator);
+            sql.append(firstFilter ? " WHERE (" : "ANY".equals(filterMatch) ? " OR " : " AND ").append(quote(connection, column)).append(' ').append(operator);
             firstFilter = false;
             if (!"IS NULL".equals(operator) && !"IS NOT NULL".equals(operator)) {
                 if (value == null) throw new AppException("此筛选运算符需要非空值");
@@ -125,6 +132,7 @@ public final class SqlDialect {
                 params.add(typedValue(value, columns.get(column), column));
             }
         }
+        if (!firstFilter) sql.append(')');
         List<String> warnings = new ArrayList<String>();
         List<String> sort = new ArrayList<String>();
         if (present(orderBy)) {

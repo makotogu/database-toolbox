@@ -78,4 +78,28 @@ class ExecutionServiceTest {
         long until=System.currentTimeMillis()+2000;while(record.activeStatement==null&&record.finishedAt==0&&System.currentTimeMillis()<until)Thread.sleep(5);
         executions.cancel(record.id);await(record);assertTrue(Arrays.asList("CANCELED","OUTCOME_UNKNOWN").contains(record.state),record.state);
     }
+
+    @Test void flatFilterGroupsBindValuesAndBindMatchModeToConfirmation() throws Exception {
+        execute(request("CREATE TABLE grouped(id INT PRIMARY KEY, title VARCHAR, amount DECIMAL(30,3)); INSERT INTO grouped VALUES(1,NULL,12345678901234567890.123),(2,'',2),(3,'x',3);", "SCRIPT"));
+        ExecutionRequest r = request(null, "TABLE_PREVIEW"); r.table="GROUPED"; r.schema="PUBLIC";
+        Map<String,Object> first = new LinkedHashMap<String,Object>(); first.put("column","ID"); first.put("operator","="); first.put("value","1");
+        Map<String,Object> second = new LinkedHashMap<String,Object>(); second.put("column","TITLE"); second.put("operator","="); second.put("value","");
+        r.filters.add(first); r.filters.add(second);
+        r.confirmationToken = executions.prepare(r).confirmationToken; r.filterMatch="ANY";
+        assertThrows(AppException.class, () -> executions.submit(r));
+        r.requestId=UUID.randomUUID().toString();
+        ExecutionRecord any=execute(r); assertEquals("SUCCEEDED",any.state,any.message);
+        assertEquals(2,any.statements.get(0).results.get(0).rows.size());
+        r.requestId=UUID.randomUUID().toString(); r.filterMatch="ALL";
+        assertEquals(0,execute(r).statements.get(0).results.get(0).rows.size());
+        r.requestId=UUID.randomUUID().toString(); first.put("column","AMOUNT"); first.put("value","12345678901234567890.123"); second.put("operator","IS NULL");
+        assertEquals(1,execute(r).statements.get(0).results.get(0).rows.size());
+        r.filterMatch="ANY OR 1=1"; assertThrows(AppException.class, () -> executions.prepare(r));
+        r.filterMatch="ALL"; r.filters=new ArrayList<Map<String,Object>>(Collections.nCopies(31,first));
+        assertThrows(AppException.class, () -> executions.prepare(r));
+        r.filters=new ArrayList<Map<String,Object>>(Collections.nCopies(30,first));
+        r.requestId=UUID.randomUUID().toString(); assertEquals(1,execute(r).statements.get(0).results.get(0).rows.size());
+        r.filters=Collections.singletonList(second); second.put("operator","="); second.put("value","' OR 1=1 --");
+        r.requestId=UUID.randomUUID().toString(); assertEquals(0,execute(r).statements.get(0).results.get(0).rows.size());
+    }
 }

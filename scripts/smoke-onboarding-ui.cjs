@@ -56,6 +56,7 @@ async function api(path, method='GET', body) {
   await page.reload();await page.locator('[data-action=edit-connection][data-id="'+custom.id+'"]').click();
   assert.equal(await page.locator('#connection-mode').inputValue(),'url');
   assert.match(await page.locator('#f-jdbcUrl').inputValue(),/<saved>/);
+  await page.locator('#f-username').fill('');await page.locator('#f-driverId').selectOption(h2.id);assert.equal(await page.locator('#f-username').inputValue(),'');await page.locator('#f-username').fill('sa');
   await page.locator('#f-name').fill('Onboarding renamed');
   await page.getByRole('button',{name:'保存连接',exact:true}).click();
   await page.locator('#connection-form').waitFor({state:'hidden'});

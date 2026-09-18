@@ -13,3 +13,5 @@ MySQL/PostgreSQL 驱动支持主机、端口和库名输入；复杂 URL、外�
 - 开发时使用临时 storage root、JAR 后端和本地静态资源。此记录不代表真实 MySQL/PostgreSQL 服务端、GaussDB、Oracle 或 Windows 已验收。
 
 URL 规则参考官方 [PostgreSQL JDBC](https://jdbc.postgresql.org/documentation/use/) 与 [MySQL Connector/J](https://dev.mysql.com/doc/connector-j/en/connector-j-reference-jdbc-url-format.html)。复杂连接交由驱动解释，不通过基础字段猜测重建。
+
+后续整体验收已通过真实 MySQL 8.4.8 / PostgreSQL 16.15 的基础表单连接，并复核编辑连接时切换驱动不会自动填回已清空的用户名；版本和最终 JAR 验收见 [多条件过滤交付记录](TABLE_FILTERS.md)。

@@ -112,7 +112,7 @@ function invalidateTree(id) {
 let cellEditor;
 const tab = () => state.tabs.find((t) => t.id === state.activeTab);
 const connection = (id) => state.connections.find((c) => c.id === id);
-const busy = (t) => !!t?.submitting || !!t?.cancelInFlight || !!t?.recovering || activeStates.has(t?.execution?.state);
+const busy = (t) => !!t?.submitting || !!t?.transactionPending || !!t?.cancelInFlight || !!t?.recovering || activeStates.has(t?.execution?.state);
 
 async function api(path, options = {}) {
   const opts = { ...options, headers: { ...options.headers } };
@@ -448,8 +448,6 @@ function renderTab(t) {
     updateHighlight();
     updateDraftStatus();
   }
-  if (t.type === "table" && $("#filter-operator"))
-    $("#filter-operator").value = t.filterOperator || "=";
   renderResults(t);
 }
 function editorToolbar(t) {
@@ -473,7 +471,10 @@ function tableToolbar(t) {
   const cols = (t.structure?.columns || []).map((c) => ({
     name: c.name || c.columnName || c.COLUMN_NAME,
   }));
-  return `<div class="object-toolbar"><h2>${icon("table")}${esc(t.name)}<span class="object-type">${esc(t.object.type || "TABLE")}</span></h2>${button("数据", "table-data", null, t.tableView !== "structure" ? "selected" : "")}${button("结构", "table-structure", null, t.tableView === "structure" ? "selected" : "")}<span class="spacer"></span>${transactionControls(t)}<span class="divider"></span>${button("SQL 模板", "table-to-sql", "code", "small")}</div><div class="object-toolbar"><select id="filter-column" aria-label="过滤列">${options(cols, t.filterColumn || "", "选择过滤列")}</select><select id="filter-operator" aria-label="过滤操作"><option value="=">等于</option><option value="<>">不等于</option><option value="LIKE">LIKE</option><option value=">">大于</option><option value="<">小于</option><option value="IS NULL">IS NULL</option><option value="IS NOT NULL">IS NOT NULL</option></select><input id="filter-value" value="${esc(t.filterValue || "")}" placeholder="过滤值（参数绑定）" aria-label="过滤值"><select id="order-column" aria-label="排序列">${options(cols, t.orderBy || "", "默认排序")}</select><label class="check-label"><input id="order-desc" type="checkbox" ${t.descending ? "checked" : ""}>降序</label>${button("读取数据", "table-read", "refresh", "primary small", busy(t) ? "disabled" : "")}${button("取消", "cancel", "stop", "ghost small", activeStates.has(t.execution?.state) ? "" : "disabled")}</div>`;
+  settleTablePreview(t);
+  const rows = t.filterDraft || [{column:"", operator:"=", value:""}];
+  const operators = [["=","等于"],["<>","不等于"],[">","大于"],[">=","大于等于"],["<","小于"],["<=","小于等于"],["LIKE","LIKE"],["NOT LIKE","NOT LIKE"],["IS NULL","IS NULL"],["IS NOT NULL","IS NOT NULL"]];
+  return `<div class="object-toolbar"><h2>${icon("table")}${esc(t.name)}<span class="object-type">${esc(t.object.type || "TABLE")}</span></h2>${button("数据", "table-data", null, t.tableView !== "structure" ? "selected" : "")}${button("结构", "table-structure", null, t.tableView === "structure" ? "selected" : "")}<span class="spacer"></span>${transactionControls(t)}<span class="divider"></span>${button("SQL 模板", "table-to-sql", "code", "small")}</div><div class="table-filters"><div class="filter-heading"><label>条件组合 <select id="filter-match" aria-label="条件组合" ${busy(t)?"disabled":""}><option value="ALL" ${t.filterMatch !== "ANY"?"selected":""}>全部满足（AND）</option><option value="ANY" ${t.filterMatch === "ANY"?"selected":""}>任一满足（OR）</option></select></label>${button("添加条件", "filter-add", "plus", "small", rows.length >= 30 || busy(t) ? "disabled" : "")}${button("清空条件", "filter-clear", null, "ghost small", busy(t)?"disabled":"")}<span id="filter-status" role="status">${esc(filterStatus(t))}</span></div><div class="filter-rows">${rows.map((f,i)=>`<div class="filter-row" data-filter-row="${i}"><select data-filter="column" aria-label="过滤列 ${i+1}" ${busy(t)?"disabled":""}>${options(cols,f.column,"选择过滤列")}</select><select data-filter="operator" aria-label="过滤操作 ${i+1}" ${busy(t)?"disabled":""}>${operators.map(([op,label])=>`<option value="${esc(op)}" ${f.operator===op?"selected":""}>${label}</option>`).join("")}</select><input data-filter="value" value="${esc(f.value ?? "")}" placeholder="过滤值（参数绑定）" aria-label="过滤值 ${i+1}" ${busy(t)||f.operator.includes("NULL")?"disabled":""}>${button("", "filter-remove", "close", "ghost icon-btn", `data-index="${i}" aria-label="移除条件 ${i+1}" ${busy(t)?"disabled":""}`)}</div>`).join("")}</div><div class="filter-heading"><select id="order-column" aria-label="排序列" ${busy(t)?"disabled":""}>${options(cols,t.orderBy||"","默认排序")}</select><label class="check-label"><input id="order-desc" type="checkbox" ${t.descending?"checked":""} ${busy(t)?"disabled":""}>降序</label>${button("读取数据", "table-read", "refresh", "primary small", busy(t)?"disabled":"")}${button("取消", "cancel", "stop", "ghost small", activeStates.has(t.execution?.state)?"":"disabled")}</div></div>`;
 }
 function routinePanel(t) {
   if (t.loading)
@@ -482,7 +483,9 @@ function routinePanel(t) {
 }
 function allResults(t) {
   const entries = [];
-  (t.execution?.statements || []).forEach((s, si) =>
+  settleTablePreview(t);
+  const displayed = t.type === "table" && t.previewResult && (t.pendingPreview || t.previewFailure) ? t.previewResult : t.execution;
+  (displayed?.statements || []).forEach((s, si) =>
     (s.results || []).forEach((r, ri) =>
       entries.push({ ...r, statement: s, statementIndex: si, resultIndex: ri }),
     ),
@@ -507,9 +510,9 @@ function renderResults(t) {
   };
   if (typeof t.resultIndex === "number" && t.resultIndex >= results.length)
     t.resultIndex = 0;
-  el.innerHTML = `<div class="result-tabs" role="tablist" aria-label="查询结果标签"><span class="result-heading">执行结果</span>${results.map((r, i) => `<button role="tab" aria-selected="${t.resultIndex === i}" class="${t.resultIndex === i ? "active" : ""}" data-action="result-tab" data-index="${i}">${esc(labels[r.kind] || r.kind)} ${i + 1}${r.kind === "UPDATE_COUNT" ? ` <span class="muted">(${r.updateCount})</span>` : r.kind === "OUT_PARAMETERS" ? ` <span class="muted">(${r.parameters?.length || 0})</span>` : r.rows ? ` <span class="muted">(${r.rows.length})</span>` : ""}</button>`).join("")}${ex ? `<button role="tab" aria-selected="${t.resultIndex === "messages"}" data-action="result-tab" data-index="messages" class="${t.resultIndex === "messages" ? "active" : ""}">消息${ex.state === "FAILED" ? " · 错误" : ""}</button>` : ""}<span class="result-state">${busy(t) ? '<i class="loading-dot"></i>' : ""}${ex ? esc(stateLabels[ex.state] || ex.state) + " · " + duration(ex.elapsedMs) : "尚未执行"}</span></div><div id="result-body" class="result-body"></div>`;
+  el.innerHTML = `<div class="result-tabs" role="tablist" aria-label="查询结果标签"><span class="result-heading">执行结果</span>${results.map((r, i) => `<button role="tab" aria-selected="${t.resultIndex === i}" class="${t.resultIndex === i ? "active" : ""}" data-action="result-tab" data-index="${i}">${esc(labels[r.kind] || r.kind)} ${i + 1}${r.kind === "UPDATE_COUNT" ? ` <span class="muted">(${r.updateCount})</span>` : r.kind === "OUT_PARAMETERS" ? ` <span class="muted">(${r.parameters?.length || 0})</span>` : r.rows ? ` <span class="muted">(${r.rows.length})</span>` : ""}</button>`).join("")}${ex ? `<button role="tab" aria-selected="${t.resultIndex === "messages"}" data-action="result-tab" data-index="messages" class="${t.resultIndex === "messages" ? "active" : ""}">消息${ex.state === "FAILED" ? " · 错误" : ""}</button>` : ""}<span class="result-state">${busy(t) ? '<i class="loading-dot"></i>' : ""}${t.type === "table" && t.previewFailure ? "本次读取失败" : t.pendingPreview && !t.pendingPreview.executionId ? "正在准备读取" : ex ? esc(stateLabels[ex.state] || ex.state) + " · " + duration(ex.elapsedMs) : "尚未执行"}</span></div>${t.type === "table" && t.previewFailure ? `<div class="filter-failure" role="alert">${esc(t.previewFailure)}${t.previewResult ? " · 当前显示上次成功结果，仅供查看；请重新读取后编辑。" : ""}</div>` : ""}<div id="result-body" class="result-body"></div>`;
   const body = $("#result-body");
-  if (t.localError && !busy(t)) {
+  if (t.localError && !busy(t) && !(t.type === "table" && t.previewResult)) {
     body.innerHTML = `<div class="result-message"><div class="message-row error">${icon("alert")}<div><strong>本次执行未能提交</strong><p>${esc(t.localError)}</p><p class="muted">请修正问题后重新执行。</p>${button(ex ? "查看上一次执行结果" : "返回工作区", "dismiss-execution-error", null, "small")}</div></div></div>`;
     return;
   }
@@ -566,7 +569,7 @@ function dataTable(columns, rows, key = "result") {
     )}${!rows.length ? `<tr><td colspan="${columns.length + 1}" class="muted" style="text-align:center;padding:24px">查询成功，返回 0 行</td></tr>` : ""}</tbody></table></div>`;
 }
 function tableFooter(t, r) {
-  return `<div class="table-footer"><span>${r.rows?.length || 0} 行 · ${r.columns?.length || 0} 列</span>${r.truncated ? '<span class="warning">结果已截断，达到资源上限</span>' : ""}<span class="muted">单击选中 · 双击 / Enter 查看或编辑</span>${t.type === "table" ? button("编辑选中格", "edit-selected-cell", "save", "small", "disabled") : ""}<span class="spacer"></span>${t.type === "table" ? `${button("上一页", "table-prev", null, "small", (t.offset || 0) === 0 || busy(t) ? "disabled" : "")}<span>第 ${Math.floor((t.offset || 0) / 200) + 1} 页</span>${button("下一页", "table-next", null, "small", (r.rows?.length || 0) < 200 || busy(t) || r.paginationSupported === false || !["MYSQL", "POSTGRESQL", "GAUSSDB", "H2"].includes(t.session?.dialect) ? "disabled" : "")}` : button("复制表格", "copy-results", "copy", "ghost small")}</div>${t.type === "table" ? `<div class="table-footer">${esc(r.readOnlyReason || "支持编辑非主键普通字段；保存前核对原值。分页会重新查询，并发修改时可能出现重复或遗漏。")}</div>` : ""}`;
+  return `<div class="table-footer"><span>${r.rows?.length || 0} 行 · ${r.columns?.length || 0} 列</span>${r.truncated ? '<span class="warning">结果已截断，达到资源上限</span>' : ""}<span class="muted">单击选中 · 双击 / Enter 查看或编辑</span>${t.type === "table" ? button("编辑选中格", "edit-selected-cell", "save", "small", "disabled") : ""}<span class="spacer"></span>${t.type === "table" ? `${button("上一页", "table-prev", null, "small", (t.offset || 0) === 0 || busy(t) || filtersDirty(t) || !!t.previewFailure ? "disabled" : "")}<span>第 ${Math.floor((t.offset || 0) / 200) + 1} 页</span>${button("下一页", "table-next", null, "small", (r.rows?.length || 0) < 200 || busy(t) || filtersDirty(t) || !!t.previewFailure || r.paginationSupported === false || !["MYSQL", "POSTGRESQL", "GAUSSDB", "H2"].includes(t.session?.dialect) ? "disabled" : "")}` : button("复制表格", "copy-results", "copy", "ghost small")}</div>${t.type === "table" ? `<div class="table-footer">${esc(r.readOnlyReason || "支持编辑非主键普通字段；保存前核对原值。分页会重新查询，并发修改时可能出现重复或遗漏。")}</div>` : ""}`;
 }
 function formatValue(value) {
   if (typeof value === "object") return JSON.stringify(value, null, 2);
@@ -725,10 +728,9 @@ async function disconnect(t) {
     render();
   }
 }
-async function execute(mode, extra = {}) {
-  const t = tab();
+async function execute(mode, extra = {}, t = tab()) {
   if (!t || busy(t)) return;
-  rememberEditor();
+  if (t === tab()) rememberEditor();
   const sourceSql = t.sql;
   const request = {
     mode,
@@ -769,7 +771,7 @@ async function execute(mode, extra = {}) {
   t.selectedCell = null;
   t.localError = null;
   t.submitting = true;
-  render();
+  if (t === tab()) render();
   try {
     const session = await ensureSession(t);
     request.sessionId = session.id;
@@ -780,12 +782,12 @@ async function execute(mode, extra = {}) {
     request.confirmationToken = prepared.confirmationToken;
     if (prepared.units?.length) t.preparedUnits = prepared.units;
     if (mode === "TABLE_PREVIEW" && prepared.units?.length) {
-      t.previewSql = prepared.units.map((x) => x.sql).join("\n");
-      t.previewBindings = (request.filters || [])
+      t.pendingPreview.sql = prepared.units.map((x) => x.sql).join("\n");
+      t.pendingPreview.bindings = (request.filters || [])
         .filter((f) => !["IS NULL", "IS NOT NULL"].includes(f.operator))
         .map((f) => f.value);
       if (["MYSQL", "POSTGRESQL", "GAUSSDB", "H2"].includes(session.dialect))
-        t.previewBindings.push(request.limit, request.offset);
+        t.pendingPreview.bindings.push(request.limit, request.offset);
     }
     if (prepared.confirmationRequired) {
       const ranges = (prepared.units || [])
@@ -814,6 +816,7 @@ async function execute(mode, extra = {}) {
       );
     if (!t.execution.id && t.execution.executionId)
       t.execution.id = t.execution.executionId;
+    if (mode === "TABLE_PREVIEW") t.pendingPreview.executionId = t.execution.id;
     if (!activeStates.has(t.execution.state)) {
       try {
         t.session = await api(`/sessions/${session.id}`);
@@ -824,8 +827,7 @@ async function execute(mode, extra = {}) {
     }
     if (mode === "TABLE_PREVIEW") {
       t.tableView = "data";
-      if (t.execution.statements?.length)
-        t.previewSql = t.execution.statements.map((s) => s.sql).join("\n");
+      settleTablePreview(t);
     }
     if (t === tab()) renderExecutionChange(t);
     startPolling();
@@ -923,34 +925,25 @@ async function recoverSession(t) {
 }
 async function transaction(action, autoCommit) {
   const t = tab();
+  if (!t || busy(t)) return;
   rememberEditor();
-  const session = await ensureSession(t);
-  if (
-    action === "AUTO_COMMIT" &&
-    autoCommit &&
-    session.autoCommit === false &&
-    !confirm("切换为自动提交会先回滚当前未提交事务。确认切换？")
-  ) {
-    render();
-    return;
+  t.transactionPending = true;
+  renderExecutionChange(t);
+  try {
+    const session = await ensureSession(t);
+    if (action === "AUTO_COMMIT" && autoCommit && session.autoCommit === false &&
+        !confirm("切换为自动提交会先回滚当前未提交事务。确认切换？")) return;
+    if (t.type === "table") t.previewStale = true;
+    t.session = await api(`/sessions/${session.id}/transaction`, {method:"POST", body:{action, autoCommit}});
+    syncSessionContext(t);
+    toast(action === "COMMIT" ? "事务已提交" : action === "ROLLBACK" ? "事务已回滚" : autoCommit ? "已启用自动提交" : "已切换为手动提交");
+    // Transfer the busy state directly to the refresh, without exposing an editable stale grid.
+    t.transactionPending = false;
+    if (t.type === "table" && t.tableView === "data") await readTable(t, t.offset);
+  } finally {
+    t.transactionPending = false;
+    if (t === tab()) renderExecutionChange(t);
   }
-  t.session = await api(`/sessions/${session.id}/transaction`, {
-    method: "POST",
-    body: { action, autoCommit },
-  });
-  syncSessionContext(t);
-  render();
-  toast(
-    action === "COMMIT"
-      ? "事务已提交"
-      : action === "ROLLBACK"
-        ? "事务已回滚"
-        : autoCommit
-          ? "已启用自动提交"
-          : "已切换为手动提交",
-  );
-  if (t.type === "table" && t.tableView === "data")
-    await readTable(t, t.offset);
 }
 async function driversDialog() {
   state.drivers = list(await api("/drivers"));
@@ -1066,9 +1059,10 @@ function fillDriverDefaults() {
   if (!profile) return;
   const url = $("#f-jdbcUrl", form),
     username = $("#f-username", form);
-  if (!url.value.trim() && profile.urlTemplate) url.value = profile.urlTemplate;
-  if (!username.value.trim() && profile.driverClass === "org.h2.Driver")
-    username.value = "sa";
+  if (!$("[name=id]", form).value) {
+    if (!url.value.trim() && profile.urlTemplate) url.value = profile.urlTemplate;
+    if (!username.value.trim() && profile.driverClass === "org.h2.Driver") username.value = "sa";
+  }
   form.configureConnectionFields();
 }
 function connectionPayload() {
@@ -1227,38 +1221,67 @@ function normalizeMode(mode) {
     ? { 1: "IN", 2: "INOUT", 4: "OUT", 5: "RETURN" }[mode] || "IN"
     : String(mode || "IN").toUpperCase();
 }
+function draftFilters(t) {
+  return {filters: (t.filterDraft || []).filter(f => f.column).map(f => ({...f, value:f.operator.includes("NULL") ? null : f.value})),
+    filterMatch:t.filterMatch || "ALL", orderBy:t.orderBy || null, descending:!!t.descending};
+}
+function filtersDirty(t) {
+  return JSON.stringify(draftFilters(t)) !== JSON.stringify(t.appliedFilters || {filters:[],filterMatch:"ALL",orderBy:null,descending:false});
+}
+function filterStatus(t) {
+  const applied = t.appliedFilters;
+  const summary = applied ? `已应用 ${applied.filters.length} 条 · ${applied.filterMatch === "ANY" ? "OR" : "AND"}` : "尚未读取";
+  return (filtersDirty(t) ? "条件待应用 · " : "") + summary;
+}
 function captureTableFilters(t) {
-  const col = $("#filter-column");
-  if (!col) return;
-  t.filterColumn = col.value;
-  t.filterOperator = $("#filter-operator").value;
-  t.filterValue = $("#filter-value").value;
+  if (t !== tab() || !$("#filter-match")) return;
+  t.filterDraft = $$("[data-filter-row]").map(row => ({column:$("[data-filter=column]",row).value,
+    operator:$("[data-filter=operator]",row).value,value:$("[data-filter=value]",row).value}));
+  t.filterMatch = $("#filter-match").value;
   t.orderBy = $("#order-column").value;
   t.descending = $("#order-desc").checked;
 }
-async function readTable(t, offset) {
+function filterChanged() {
+  const t = tab(); captureTableFilters(t);
+  $$("[data-filter-row]").forEach(row => { $("[data-filter=value]",row).disabled = $("[data-filter=operator]",row).value.includes("NULL"); });
+  t.selectedCell = null;
+  $("#filter-status").textContent = filterStatus(t);
+  renderResults(t);
+}
+function settleTablePreview(t) {
+  const pending = t.pendingPreview, ex = t.execution;
+  if (!pending?.executionId || !ex || pending.executionId !== ex.id || activeStates.has(ex.state)) return;
+  if (ex.state === "SUCCEEDED") {
+    t.appliedFilters = pending.filters;
+    t.offset = pending.offset;
+    t.previewSql = pending.sql;
+    t.previewBindings = pending.bindings;
+    t.previewResult = ex;
+    t.previewFailure = null;
+    t.previewStale = false;
+  } else {
+    t.previewFailure = ex.message || stateLabels[ex.state] || "本次读取未完成";
+  }
+  t.pendingPreview = null;
+}
+async function readTable(t, offset, apply = false) {
+  if (busy(t)) return;
   captureTableFilters(t);
-  t.offset = offset ?? 0;
+  const filters = apply || !t.appliedFilters ? draftFilters(t) : t.appliedFilters;
+  if (apply && (t.filterDraft || []).some(f => !f.column && f.value !== "")) throw new Error("请为填写了值的条件选择过滤列。");
+  t.pendingPreview = {filters, offset:offset ?? 0};
+  t.previewStale = true;
+  t.previewFailure = null;
   t.tableView = "data";
-  await execute("TABLE_PREVIEW", {
-    sql: "",
-    table: t.object.name,
-    catalog: t.object.catalog || "",
-    schema: t.object.schema || "",
-    offset: t.offset,
-    limit: 200,
-    orderBy: t.orderBy || null,
-    descending: !!t.descending,
-    filters: t.filterColumn
-      ? [
-          {
-            column: t.filterColumn,
-            operator: t.filterOperator || "=",
-            value: t.filterValue,
-          },
-        ]
-      : [],
-  });
+  try {
+    await execute("TABLE_PREVIEW", {sql:"", table:t.object.name, catalog:t.object.catalog || "", schema:t.object.schema || "",
+      offset:offset ?? 0, limit:200, ...filters}, t);
+  } catch (error) {
+    t.pendingPreview = null;
+    t.previewFailure = error.message;
+    if (t === tab()) renderExecutionChange(t);
+    throw error;
+  }
 }
 async function closeTab(id) {
   const t = state.tabs.find((x) => x.id === id);
@@ -1363,6 +1386,8 @@ function cellDetail(cell) {
 function cellReadOnly(t, result, row, column) {
   const c = result?.columns?.[column];
   if (busy(t)) return "请等待当前执行结束";
+  if (t.previewStale || t.previewFailure) return "上次预览仅供查看，请重新读取后编辑";
+  if (filtersDirty(t)) return "过滤条件待应用，请先读取数据";
   if (t.execution?.mode !== "TABLE_PREVIEW")
     return "普通 SQL 查询结果只读；请打开表内容预览";
   if (result?.truncatedCells?.some(([r, c]) => r === row && c === column))
@@ -1750,7 +1775,19 @@ const actions = {
     tab().tableView = "data";
     renderTab(tab());
   },
-  "table-read": () => readTable(tab(), 0),
+  "filter-add": () => {
+    const t = tab(); if (busy(t)) return; captureTableFilters(t);
+    if (t.filterDraft.length < 30) t.filterDraft.push({column:"", operator:"=", value:""});
+    renderTab(t);
+  },
+  "filter-remove": el => {
+    const t = tab(); if (busy(t)) return; captureTableFilters(t);
+    t.filterDraft.splice(Number(el.dataset.index),1); renderTab(t);
+  },
+  "filter-clear": () => {
+    const t = tab(); if (busy(t)) return; t.filterDraft = []; t.filterMatch = "ALL"; renderTab(t);
+  },
+  "table-read": () => readTable(tab(), 0, true),
   "table-prev": () => readTable(tab(), Math.max(0, (tab().offset || 0) - 200)),
   "table-next": () => readTable(tab(), (tab().offset || 0) + 200),
   "table-to-sql": () => {
@@ -1886,6 +1923,7 @@ document.addEventListener("dblclick", (e) => {
 document.addEventListener("change", (e) => {
   const target = e.target,
     t = tab();
+  if (target.matches("[data-filter], #filter-match, #order-column, #order-desc")) filterChanged();
   if (target.id === "cell-null") $("#cell-input").disabled = target.checked;
   if (target.id === "f-driverId") fillDriverDefaults();
   if (target.id === "global-connection") {
@@ -1932,6 +1970,7 @@ document.addEventListener("change", (e) => {
   }
 });
 document.addEventListener("input", (e) => {
+  if (e.target.matches("[data-filter=value]")) filterChanged();
   if (e.target.id === "sql-editor") {
     const t = tab();
     t.sql = e.target.value;
