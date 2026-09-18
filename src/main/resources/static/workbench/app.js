@@ -1,3 +1,4 @@
+import { installConnectionFields } from "./connection-fields.js";
 import { highlightSql } from "./sql-highlight.js";
 import { createDraftManager } from "./sql-drafts.js";
 
@@ -280,7 +281,7 @@ function newTab(spec = {}, restoring = false) {
 function render() {
   const t = tab();
   $("#app").innerHTML =
-    `<header class="app-header">${button("", "sidebar-toggle", "layout", "ghost icon-btn split-toggle", 'aria-label="显示或隐藏对象导航"')}<div class="brand"><span class="brand-mark">${icon("database")}</span>数据库工作台 <span class="version">V2</span></div><div class="header-context"><span class="context-label">连接</span><select id="global-connection" aria-label="当前连接">${options(state.connections, state.selectedConnection, "选择数据库连接")}</select></div><span class="spacer"></span><span class="local-label"><i class="dot online"></i>本机工作区</span>${button('<span class="button-label">新建 SQL</span>', "new-tab", "plus")}${button('<span class="button-label">驱动管理</span>', "drivers", "driver", "ghost")}${button("", "execution-settings", "settings", "ghost icon-btn", 'title="当前标签执行设置" aria-label="当前标签执行设置"')}${button("", "shortcuts", "keyboard", "ghost icon-btn", 'title="键盘快捷键" aria-label="键盘快捷键"')}</header><div class="workspace ${state.sidebarOpen ? "sidebar-open" : ""}"><aside class="sidebar"><div class="sidebar-head"><strong>数据库导航</strong><span class="spacer"></span>${button("", "new-connection", "plus", "ghost icon-btn", 'title="新建连接" aria-label="新建连接"')}${button("", "refresh-tree", "refresh", "ghost icon-btn", 'title="刷新对象" aria-label="刷新对象"')}</div><div class="search-box">${icon("search")}<input id="object-search" value="${esc(state.search)}" placeholder="筛选对象名称" aria-label="筛选对象名称"></div><div id="tree" class="tree"></div><div class="sidebar-footer"><strong>${icon("link")} 每个标签独立连接</strong>关闭标签会回滚未提交事务</div></aside><main class="main"><div class="tab-strip"><div class="tabs" role="tablist" aria-label="工作区标签">${state.tabs.map((x) => `<button class="work-tab ${x.id === state.activeTab ? "active" : ""}" role="tab" aria-selected="${x.id === state.activeTab}" data-action="select-tab" data-id="${x.id}" title="${esc(x.name)}">${icon(x.type === "table" ? "table" : x.type === "routine" ? "code" : "file")}<span class="tab-label">${esc(x.name)}</span>${busy(x) ? '<i class="loading-dot"></i>' : ""}<span class="close-tab" data-action="close-tab" data-id="${x.id}" role="button" tabindex="0" aria-label="关闭 ${esc(x.name)}">${icon("close")}</span></button>`).join("")}</div>${button("", "new-tab", "plus", "ghost icon-btn", 'title="新建 SQL 标签" aria-label="新建 SQL 标签"')}</div><div id="tab-body" class="tab-body"></div></main></div><footer id="status-bar" class="status-bar"></footer>`;
+    `<header class="app-header">${button("", "sidebar-toggle", "layout", "ghost icon-btn split-toggle", 'aria-label="显示或隐藏对象导航"')}<div class="brand"><span class="brand-mark">${icon("database")}</span>数据库工作台 <span class="version">V2</span></div><div class="header-context"><span class="context-label">连接</span><select id="global-connection" aria-label="当前连接">${options(state.connections, state.selectedConnection, "选择数据库连接")}</select></div><span class="spacer"></span><span class="local-label"><i class="dot online"></i>本机工作区</span>${button('<span class="button-label">新建 SQL</span>', "new-tab", "plus")}${button('<span class="button-label">驱动管理</span>', "drivers", "driver", "ghost")}${button("", "execution-settings", "settings", "ghost icon-btn", 'title="当前标签执行设置" aria-label="当前标签执行设置"')}${button("", "shortcuts", "keyboard", "ghost icon-btn", 'title="键盘快捷键" aria-label="键盘快捷键"')}</header><div class="workspace ${state.sidebarOpen ? "sidebar-open" : ""}"><aside class="sidebar"><div class="sidebar-head"><strong>数据库导航</strong><span class="spacer"></span>${button("", "new-connection", "plus", "ghost icon-btn", 'title="新建连接" aria-label="新建连接"')}${button("", "refresh-tree", "refresh", "ghost icon-btn", 'title="刷新对象" aria-label="刷新对象"')}</div><div class="search-box">${icon("search")}<input id="object-search" value="${esc(state.search)}" placeholder="筛选对象名称" aria-label="筛选对象名称"></div><div id="tree" class="tree"></div><div class="sidebar-footer"><div class="demo-entry">${button("试用 H2", "demo-connection", "play", "ghost small")}</div><strong>${icon("link")} 每个标签独立连接</strong>关闭标签会回滚未提交事务</div></aside><main class="main"><div class="tab-strip"><div class="tabs" role="tablist" aria-label="工作区标签">${state.tabs.map((x) => `<button class="work-tab ${x.id === state.activeTab ? "active" : ""}" role="tab" aria-selected="${x.id === state.activeTab}" data-action="select-tab" data-id="${x.id}" title="${esc(x.name)}">${icon(x.type === "table" ? "table" : x.type === "routine" ? "code" : "file")}<span class="tab-label">${esc(x.name)}</span>${busy(x) ? '<i class="loading-dot"></i>' : ""}<span class="close-tab" data-action="close-tab" data-id="${x.id}" role="button" tabindex="0" aria-label="关闭 ${esc(x.name)}">${icon("close")}</span></button>`).join("")}</div>${button("", "new-tab", "plus", "ghost icon-btn", 'title="新建 SQL 标签" aria-label="新建 SQL 标签"')}</div><div id="tab-body" class="tab-body"></div></main></div><footer id="status-bar" class="status-bar"></footer>`;
   renderTree();
   renderTab(t);
   renderStatus();
@@ -1003,6 +1004,22 @@ async function chooseDriverClass(profile) {
     `${button("返回", "drivers", null)}${button("保存驱动类", "save-driver-class", "check", "primary")}`,
   );
 }
+let demoOpening = false;
+async function openDemo() {
+  if (demoOpening) return;
+  demoOpening = true;
+  try {
+    const demo = await api("/connections/demo", {method: "POST"});
+    state.connections = list(await api("/connections"));
+    state.selectedConnection = demo.id;
+    state.expanded.add(demo.id);
+    // A new tab protects any existing text, draft, selection and transaction.
+    newTab({name:"H2 演示 · SELECT 1", connectionId:demo.id, sql:"SELECT 1;"});
+    await execute("SCRIPT", {sql:"SELECT 1;"});
+    loadTree(demo.id, true);
+    toast("已打开 H2 内存演示。应用退出后数据清空；连接配置会保留。这里只执行固定 SELECT 1。");
+  } finally { demoOpening = false; }
+}
 async function connectionDialog(id) {
   const c = id ? connection(id) : {};
   if (!state.drivers.length) {
@@ -1012,14 +1029,14 @@ async function connectionDialog(id) {
   }
   showDialog(
     id ? "编辑数据库连接" : "新建数据库连接",
-    `<p class="form-note">连接信息仅保存在本机。选择驱动可填入 URL 模板；网络数据库请替换地址和库名。H2 内存库可直接试用，应用退出后数据清空。</p><form id="connection-form"><input name="id" type="hidden" value="${esc(c.id || "")}"><div class="form-grid">${field("连接名称", "name", c.name || "")}<div class="form-field"><label for="f-driverId">JDBC 驱动</label><select id="f-driverId" name="driverId" required>${options(
+    `<p class="form-note">连接信息仅保存在本机。MySQL / PostgreSQL 可填写地址与库名；复杂连接使用完整 URL。H2 演示数据在应用退出后清空。</p><form id="connection-form"><input name="id" type="hidden" value="${esc(c.id || "")}"><div class="form-grid">${field("连接名称", "name", c.name || "")}<div class="form-field"><label for="f-driverId">JDBC 驱动</label><select id="f-driverId" name="driverId" required>${options(
       state.drivers.map((p) => ({
         ...p,
         name: `${p.name}${p.version ? ` ${p.version}` : ""}${p.bundled ? " · 内置" : ""}`,
       })),
       c.driverId || "",
       "选择 JDBC 驱动",
-    )}</select></div>${field("完整 JDBC URL", "jdbcUrl", c.jdbcUrl || "", "text", "切换驱动会保留已填写的 URL，请确认它与所选驱动一致。", true)}${field("用户名", "username", c.username || "")}${field("密码", "password", "", "password", id ? "留空保留已保存密码" : "密码加密保存在本机")}<div class="form-field"><label for="f-dialectHint">SQL 方言</label><select id="f-dialectHint" name="dialectHint">${[
+    )}</select></div><div class="form-field wide"><label for="connection-mode">连接方式</label><select id="connection-mode"><option value="basic">地址与库名</option><option value="url">完整 JDBC URL</option></select><small id="connection-mode-hint"></small></div><div id="connection-basic" class="form-grid wide" hidden><div class="form-field"><label for="basic-host">主机地址</label><input id="basic-host" autocomplete="off"></div><div class="form-field"><label for="basic-port">端口</label><input id="basic-port" inputmode="numeric"></div><div class="form-field wide"><label for="basic-database">数据库名称</label><input id="basic-database" autocomplete="off"></div></div>${field("完整 JDBC URL", "jdbcUrl", c.jdbcUrl || "", "text", "切换驱动会保留已填写的 URL，请确认它与所选驱动一致。", true)}${field("用户名", "username", c.username || "")}${field("密码", "password", "", "password", id ? "留空保留已保存密码" : "密码加密保存在本机")}<details class="wide connection-advanced"><summary>高级设置：方言、命名空间与 JDBC 属性</summary><div class="form-grid"><div class="form-field"><label for="f-dialectHint">SQL 方言</label><select id="f-dialectHint" name="dialectHint">${[
       { id: "AUTO", name: "自动识别" },
       { id: "GENERIC", name: "通用 JDBC" },
       { id: "MYSQL", name: "MySQL" },
@@ -1033,14 +1050,16 @@ async function connectionDialog(id) {
       )
       .join(
         "",
-      )}</select><small>方言决定代码块、分页和 EXPLAIN 的生成规则。</small></div><div class="form-field"><label>已保存凭据</label><label class="check-label"><input name="clearPassword" type="checkbox">清除已保存密码</label><small>修改密码时，在密码框中输入新密码。</small></div>${field("默认 catalog（可选）", "catalog", c.catalog || "")}${field("默认 schema（可选）", "schema", c.schema || "")}<div class="form-field wide"><label for="f-properties">JDBC 扩展属性（JSON 对象）</label><textarea id="f-properties" name="properties" class="mono" spellcheck="false">${esc(JSON.stringify(c.properties || {}, null, 2))}</textarea><small>例如 { "connectTimeout": "10" }；用户名与密码使用上方专用字段；&lt;saved&gt; 表示保留已有值。</small></div><div class="form-field wide draft-setting"><label class="check-label"><input name="saveSqlDrafts" type="checkbox" ${c.saveSqlDrafts ? "checked" : ""} aria-describedby="draft-privacy">保存此连接的 SQL 草稿（可选）</label><small id="draft-privacy">默认关闭。开启后，SQL 标签的文本和名称会自动加密保存到本机，刷新后可恢复。SQL 可能含口令、个人信息或业务数据；拥有本机账户与密钥的人仍可读取。结果、调用参数和事务状态不保存，也不会自动执行。关闭此选项会清除该连接的已存草稿；下载文件和备份需自行管理。</small></div></div><div id="connection-feedback" class="form-feedback" role="status"></div></form>`,
+      )}</select><small>方言决定代码块、分页和 EXPLAIN 的生成规则。</small></div><div class="form-field"><label>已保存凭据</label><label class="check-label"><input name="clearPassword" type="checkbox">清除已保存密码</label><small>修改密码时，在密码框中输入新密码。</small></div>${field("默认 catalog（可选）", "catalog", c.catalog || "")}${field("默认 schema（可选）", "schema", c.schema || "")}<div class="form-field wide"><label for="f-properties">JDBC 扩展属性（JSON 对象）</label><textarea id="f-properties" name="properties" class="mono" spellcheck="false">${esc(JSON.stringify(c.properties || {}, null, 2))}</textarea><small>例如 { "connectTimeout": "10" }；用户名与密码使用上方专用字段；&lt;saved&gt; 表示保留已有值。</small></div></div></details><div class="form-field wide draft-setting"><label class="check-label"><input name="saveSqlDrafts" type="checkbox" ${c.saveSqlDrafts ? "checked" : ""} aria-describedby="draft-privacy">保存此连接的 SQL 草稿（可选）</label><small id="draft-privacy">默认关闭。开启后，SQL 标签的文本和名称会自动加密保存到本机，刷新后可恢复。SQL 可能含口令、个人信息或业务数据；拥有本机账户与密钥的人仍可读取。结果、调用参数和事务状态不保存，也不会自动执行。关闭此选项会清除该连接的已存草稿；下载文件和备份需自行管理。</small></div></div><div id="connection-feedback" class="form-feedback" role="status"></div></form>`,
     `${id ? button("删除连接", "delete-connection", "trash", "danger", `data-id="${id}"`) : ""}<span class="spacer"></span>${button("测试连接", "test-connection", "link")}${button("取消", "dialog-close", null)}${button("保存连接", "save-connection", "check", "primary")}`,
     true,
   );
+  const form = $("#connection-form");
+  installConnectionFields(form, () => state.drivers.find(p => p.id === $("#f-driverId", form).value));
 }
 function fillDriverDefaults() {
   const form = $("#connection-form");
-  if (!form || $("[name=id]", form).value) return;
+  if (!form) return;
   const profile = state.drivers.find(
     (p) => p.id === $("#f-driverId", form).value,
   );
@@ -1050,10 +1069,12 @@ function fillDriverDefaults() {
   if (!url.value.trim() && profile.urlTemplate) url.value = profile.urlTemplate;
   if (!username.value.trim() && profile.driverClass === "org.h2.Driver")
     username.value = "sa";
+  form.configureConnectionFields();
 }
 function connectionPayload() {
-  const form = $("#connection-form"),
-    data = Object.fromEntries(new FormData(form));
+  const form = $("#connection-form");
+  form.syncConnectionUrl();
+  const data = Object.fromEntries(new FormData(form));
   data.clearPassword = $("[name=clearPassword]", form).checked;
   data.saveSqlDrafts = $("[name=saveSqlDrafts]", form).checked;
   try {
@@ -1563,6 +1584,7 @@ const actions = {
   "new-tab": () => newTab(),
   drivers: driversDialog,
   "new-connection": () => connectionDialog(),
+  "demo-connection": () => openDemo(),
   "edit-connection": (el) => connectionDialog(el.dataset.id),
   "import-driver": importDriver,
   "driver-class": (el) =>
@@ -1801,7 +1823,7 @@ const actions = {
   shortcuts: () =>
     showDialog(
       "键盘快捷键",
-      `<div class="shortcut-list"><span>执行当前语句</span><kbd>⌘ / Ctrl + Enter</kbd><span>执行选区</span><kbd>⌘ / Ctrl + Shift + Enter</kbd><span>新建 SQL 标签</span><kbd>⌘ / Ctrl + Alt + N</kbd><span>保存 SQL 文件</span><kbd>⌘ / Ctrl + S</kbd><span>缩进 / 取消缩进</span><kbd>Tab / Shift + Tab</kbd><span>查看单元格</span><kbd>Enter / 双击</kbd></div><p class="form-note" style="margin-top:21px">「整块」完整发送选区或全部文本，保留过程体内部分号；「脚本」由后端识别边界，再顺序执行。SQL 文本仅在你主动保存时写入文件。</p>`,
+      `<div class="shortcut-list"><span>执行当前语句</span><kbd>⌘ / Ctrl + Enter</kbd><span>执行选区</span><kbd>⌘ / Ctrl + Shift + Enter</kbd><span>新建 SQL 标签</span><kbd>⌘ / Ctrl + Alt + N</kbd><span>保存 SQL 文件</span><kbd>⌘ / Ctrl + S</kbd><span>缩进 / 取消缩进</span><kbd>Tab / Shift + Tab</kbd><span>查看单元格</span><kbd>Enter / 双击</kbd></div><p class="form-note" style="margin-top:21px">「整块」完整发送选区或全部文本，保留过程体内部分号；「脚本」由后端识别边界，再顺序执行。SQL 可手动下载为文件；连接开启“保存 SQL 草稿”后，文本还会自动加密保存在本机。草稿不会自动执行。</p>`,
     ),
 };
 // Never let a browser form navigation put connection credentials in the URL.

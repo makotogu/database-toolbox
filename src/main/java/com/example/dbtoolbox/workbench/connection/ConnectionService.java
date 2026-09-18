@@ -69,6 +69,38 @@ public class ConnectionService {
 
     public Connection open(String id) { return openConfig(get(id)); }
 
+    /** Creates only a managed, disposable in-memory profile; SQL still goes through execution prepare/submit. */
+    public synchronized ConnectionProfile demo() {
+        ensureMigrated();
+        synchronized (drivers) {
+            DriverProfile h2 = null;
+            for (DriverProfile driver : drivers.list())
+                if (driver.bundled && "org.h2.Driver".equals(driver.driverClass)) { h2 = driver; break; }
+            if (h2 == null) throw new AppException("内置 H2 驱动不可用，请检查驱动管理");
+            ConnectionCatalog catalog = readCatalog();
+            ConnectionProfile previous = existing(catalog, catalog.demoConnectionId);
+            if (previous != null && h2.id.equals(previous.driverId) && demoUrl(previous.id).equals(previous.jdbcUrl)
+                    && "sa".equals(previous.username) && !hasText(previous.password) && previous.properties.isEmpty()
+                    && !hasText(previous.catalog) && !hasText(previous.schema) && !hasText(previous.dialectHint)
+                    && !previous.saveSqlDrafts) return sanitized(previous);
+            ConnectionProfile profile = new ConnectionProfile();
+            profile.id = UUID.randomUUID().toString();
+            profile.name = "H2 演示";
+            profile.driverId = h2.id;
+            profile.jdbcUrl = demoUrl(profile.id);
+            profile.username = "sa";
+            profile.password = "";
+            catalog.profiles.add(profile);
+            catalog.demoConnectionId = profile.id;
+            store.write(catalog);
+            return sanitized(profile);
+        }
+    }
+
+    private static String demoUrl(String id) {
+        return "jdbc:h2:mem:toolbox_demo_" + id.replace("-", "") + ";DB_CLOSE_DELAY=-1";
+    }
+
     public synchronized ConnectionProfile save(ConnectionProfile request) {
         if (request == null) throw new AppException("缺少连接配置");
         ensureMigrated();
@@ -347,6 +379,7 @@ public class ConnectionService {
 
     public static class ConnectionCatalog {
         public int version = 2;
+        public String demoConnectionId;
         public List<ConnectionProfile> profiles = new ArrayList<ConnectionProfile>();
         public boolean legacyMigrated;
         public int legacyCount;
