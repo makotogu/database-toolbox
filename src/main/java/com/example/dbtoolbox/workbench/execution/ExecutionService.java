@@ -60,7 +60,7 @@ public class ExecutionService {
         if("TABLE_PREVIEW".equals(mode)) {
             plan.previewCatalog=request.catalog;plan.previewSchema=request.schema;
             String actualDialect=SqlDialect.detect(session.connection,null);
-            if(Arrays.asList("H2","POSTGRESQL","MYSQL").contains(actualDialect)) {
+            if(Arrays.asList("H2","POSTGRESQL","GAUSSDB","MYSQL").contains(actualDialect)) {
                 if(plan.previewCatalog==null||plan.previewCatalog.isEmpty())
                     plan.previewCatalog="MYSQL".equals(actualDialect)&&request.schema!=null&&!request.schema.isEmpty()?request.schema:session.connection.getCatalog();
                 if("MYSQL".equals(actualDialect))plan.previewSchema=null;
