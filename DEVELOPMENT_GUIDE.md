@@ -252,9 +252,13 @@ java -jar database-toolbox.jar --server.port=18080
 
 `ResultReader` 记录 `truncatedCells` 的 `[row, column]`；行数截断不会禁止其他完整单元格编辑。表预览结果公开列的 `editable/nullable/readOnlyReason` 和结果级 `readOnlyReason`，隐藏 `CellEdits.Snapshot`。服务端校验预览所属会话、版本、成功终态、行列、主键和类型，从缓存取原值与完整主键。执行后旧快照失效，必须刷新。
 
-`CellEdits` 仅为 H2、PostgreSQL、MySQL InnoDB 开启写回。根据 JDBC 元数据引用标识符并绑定值；执行前复核表结构。自动提交时使用短事务，手动事务使用保存点。`SELECT … FOR UPDATE` 后按类型精确比较所选格原值，避免文本排序规则导致误判；UPDATE 必须影响一行。重新读取验证输入未被静默舍入/转换，数据库警告或触发器改写输入值也回滚本次保存。不会检查其他列是否改变，不保证检测删除后以相同主键/原值重建的记录。
+`CellEdits` 为 H2、PostgreSQL、MySQL InnoDB 以及待厂商验证的 GaussDB 兼容路径开启写回检查。根据 JDBC 元数据引用标识符并绑定值；执行前复核表结构。自动提交时使用短事务，手动事务使用保存点。`SELECT … FOR UPDATE` 后按类型精确比较所选格原值，避免文本排序规则导致误判；UPDATE 必须影响一行。重新读取验证输入未被静默舍入/转换，数据库警告或触发器改写输入值也回滚本次保存。不会检查其他列是否改变，不保证检测删除后以相同主键/原值重建的记录。
 
-回滚失败时禁止通过恢复 autoCommit 隐式提交，关闭失效会话。厂商/驱动未经验证或元数据不足时保持只读，不能为了开放编辑绕过主键、事务或保存点检查。新增能力需补充 `CellEditingTest`、一次性厂商数据库检查和浏览器验证。
+回滚失败时禁止通过恢复 autoCommit 隐式提交，关闭失效会话。未适配的厂商路径或元数据不足时保持只读，不能为了开放编辑绕过主键、事务或保存点检查。新增能力需补充 `CellEditingTest`、一次性厂商数据库检查和浏览器验证；GaussDB 503 SPC2000C 本次仅有兼容夹具证据，不视为厂商验收通过。
+
+`ColumnGeneration` 先枚举 JDBC 结果的字段标签，以索引读取可选的 `IS_GENERATEDCOLUMN` / `IS_AUTOINCREMENT`，保留 YES / NO / 未知三态。PostgreSQL/GaussDB 属性未知时，在同一会话以 schema/table 绑定参数查询 `pg_attribute` 与 `pg_attrdef`；使用目录实际返回的 `attgenerated`、`adgencol`、`attidentity`，不根据服务器版本猜测字段存在性。没有生成标记但 `atthasdef=false` 且没有默认值目录行时，才可确认非生成列；有默认值而无生成标记时保持未知。缺失自增标记时，仅当 `attidentity` 明确为空且无默认值才确认非自增，不解析默认表达式猜测序列。手动事务内的检查使用独立保存点，兼容查询失败只撤销检查，保留此前用户修改。保存前再次检查，属性变化会拒绝旧快照。
+
+可选真实 PostgreSQL 目录回退测试：将 `TOOLBOX_TEST_POSTGRES_URL`、`TOOLBOX_TEST_POSTGRES_USER`、`TOOLBOX_TEST_POSTGRES_DRIVER`（驱动 JAR 绝对路径）指向一次性 PostgreSQL 12+ 数据库，密码可用 `TOOLBOX_TEST_POSTGRES_PASSWORD` 提供，再执行 `mvn -Dtest=PostgresCellMetadataTest test`。测试独立加载驱动，隐藏 JDBC 生成列标记以强制目录回退，并验证 PostgreSQL 语句错误后的保存点恢复；默认未设置环境变量时跳过。它不能代替 GaussDB 实测。
 
 ### 连接向导
 
