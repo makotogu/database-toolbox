@@ -15,6 +15,7 @@ PORT=${TOOLBOX_PORT:-8080}
 DATA_DIR=${TOOLBOX_DATA_DIR:-$APP_DIR/data}
 START_TIMEOUT=${TOOLBOX_START_TIMEOUT:-30}
 STOP_TIMEOUT=${TOOLBOX_STOP_TIMEOUT:-30}
+OPEN_BROWSER=${TOOLBOX_OPEN_BROWSER:-auto}
 LOCKED=false
 PID=
 TOKEN=
@@ -36,6 +37,7 @@ status   查看本脚本管理的进程（运行中退出码 0，未运行退出
   TOOLBOX_HOME               JAR 所在目录，默认脚本所在目录
   TOOLBOX_START_TIMEOUT      启动等待秒数，默认 30
   TOOLBOX_STOP_TIMEOUT       停止等待秒数，默认 30
+  TOOLBOX_OPEN_BROWSER       auto（默认）、1 或 0；无桌面/SSH 默认不打开浏览器
 
 日志：logs/database-toolbox-<启动标识>.log（每次启动新建，不覆盖旧日志）
 进程：run/database-toolbox.pid
@@ -90,6 +92,40 @@ positive_seconds() {
     [ "$1" -ge 1 ] && [ "$1" -le 3600 ]
 }
 
+open_browser() {
+    [ "$OPEN_BROWSER" != 0 ] || return 0
+    SYSTEM=$(uname -s)
+    if [ "$OPEN_BROWSER" = auto ]; then
+        if [ -n "${SSH_CONNECTION:-}${SSH_TTY:-}" ] ||
+            { [ "$SYSTEM" != Darwin ] && [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; }; then
+            echo "当前为无桌面或 SSH 环境，请在本机浏览器访问上述地址。"
+            return 0
+        fi
+    fi
+    if [ "$SYSTEM" = Darwin ]; then OPENER=open; else OPENER=xdg-open; fi
+    if ! command -v "$OPENER" >/dev/null 2>&1; then
+        echo "未找到 $OPENER；服务已启动，请手动打开上述地址。"
+        return 0
+    fi
+    BROWSER_LOG="$LOG_DIR/browser-$TOKEN.log"
+    # Desktop launchers may wait for their browser. Detach them from the service/launcher lock.
+    nohup sh -c '"$1" "$2" || echo "浏览器未打开，请手动访问 $2"' \
+        sh "$OPENER" "http://127.0.0.1:$PORT" > "$BROWSER_LOG" 2>&1 < /dev/null &
+    echo "已请求打开浏览器；若未弹出请手动访问。浏览器日志：$BROWSER_LOG"
+}
+
+startup_failure() {
+    echo "启动失败，日志：$LOG_FILE" >&2
+    if grep -E 'Port [0-9]+ was already in use|Address already in use' "$LOG_FILE" >/dev/null 2>&1; then
+        echo "端口 $PORT 已被占用；请更换 TOOLBOX_PORT，或停止占用端口的服务。" >&2
+    elif grep -F '数据目录正由另一个工作台使用' "$LOG_FILE" >/dev/null 2>&1; then
+        echo "数据目录已被其他工作台使用；请停止原实例，或设置独立的 TOOLBOX_DATA_DIR。" >&2
+    elif grep -F '无法锁定本地数据目录' "$LOG_FILE" >/dev/null 2>&1; then
+        echo "无法访问或锁定数据目录；请检查 TOOLBOX_DATA_DIR 路径和当前账号权限。" >&2
+    fi
+    tail -n 25 "$LOG_FILE" >&2
+}
+
 start_app() {
     if is_managed; then
         echo "已在运行，PID=${PID}，地址：http://127.0.0.1:$SAVED_PORT"
@@ -100,6 +136,7 @@ start_app() {
         echo "TOOLBOX_PORT 必须是 1–65535 的整数" >&2; return 1
     fi
     positive_seconds "$START_TIMEOUT" || { echo "启动等待时间必须为 1–3600 秒" >&2; return 1; }
+    case "$OPEN_BROWSER" in auto|0|1) ;; *) echo "TOOLBOX_OPEN_BROWSER 必须为 auto、1 或 0" >&2; return 1 ;; esac
     [ -f "$JAR_FILE" ] || { echo "找不到 JAR：$JAR_FILE" >&2; return 1; }
     if [ -n "${JAVA_HOME:-}" ]; then
         JAVA_BIN="$JAVA_HOME/bin/java"
@@ -125,14 +162,14 @@ start_app() {
     while [ "$COUNT" -lt "$START_TIMEOUT" ]; do
         if ! kill -0 "$PID" 2>/dev/null; then
             rm -f "$PID_FILE"
-            echo "启动失败，日志：$LOG_FILE" >&2
-            tail -n 25 "$LOG_FILE" >&2
+            startup_failure
             return 1
         fi
         if grep -F "数据库工作台已启动: http://127.0.0.1:$PORT" "$LOG_FILE" >/dev/null 2>&1 && is_managed; then
             echo "启动成功，PID=$PID"
             echo "访问：http://127.0.0.1:$PORT"
             echo "日志：$LOG_FILE"
+            open_browser
             return 0
         fi
         sleep 1
