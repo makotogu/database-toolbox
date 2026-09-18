@@ -51,11 +51,13 @@ sh database-toolbox.sh restart
 sh database-toolbox.sh stop
 ```
 
-脚本后台启动服务，每次启动的日志保存在旁边 `logs/`，进程记录在 `run/`；默认数据目录为脚本旁的 `data/`，不受执行命令时所在目录影响。停止使用 TERM 等待优雅退出，不会自动强杀。脚本只管理自己启动且身份匹配的进程；手动 `java -jar` 启动的进程需由原启动方式停止。
+脚本后台启动服务，每次启动的日志保存在旁边 `logs/`，进程记录在 `run/`；默认数据目录为脚本旁的 `data/`，不受执行命令时所在目录影响。服务就绪后，macOS 使用 `open`、Linux 桌面使用 `xdg-open` 请求打开浏览器；无桌面或 SSH 环境默认只打印地址。浏览器启动失败不影响服务，可手动访问。停止使用 TERM 等待优雅退出，不会自动强杀。脚本只管理自己启动且身份匹配的进程；手动 `java -jar` 启动的进程需由原启动方式停止。
 
 ```bash
 # 自定义端口；status/stop 会读取记录的进程，无需重复传端口
 TOOLBOX_PORT=18080 sh database-toolbox.sh start
+# 禁止自动打开浏览器；设置为 1 则显式尝试打开，默认 auto
+TOOLBOX_OPEN_BROWSER=0 sh database-toolbox.sh start
 # 自定义 Java 和数据目录
 JAVA_HOME=/path/to/java8 TOOLBOX_DATA_DIR=/path/to/data sh database-toolbox.sh start
 ```
