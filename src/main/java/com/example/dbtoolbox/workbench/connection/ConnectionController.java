@@ -15,6 +15,7 @@ public class ConnectionController {
     @GetMapping public ApiResponse<List<ConnectionProfile>> list() { return ApiResponse.ok(connections.list()); }
     @PostMapping public ApiResponse<ConnectionProfile> save(@RequestBody ConnectionProfile request) { return ApiResponse.ok(connections.save(request)); }
     @PostMapping("/test") public ApiResponse<Map<String, Object>> test(@RequestBody ConnectionProfile request) { return ApiResponse.ok(connections.test(request)); }
+    @PostMapping("/demo") public ApiResponse<ConnectionProfile> demo() { return ApiResponse.ok(connections.demo()); }
     @DeleteMapping("/{id}") public ApiResponse<Void> delete(@PathVariable String id) {
         connections.delete(id);
         return ApiResponse.ok(null);

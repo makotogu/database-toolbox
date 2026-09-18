@@ -123,6 +123,7 @@ ExecutionRecord
 | `/api/drivers/{id}/class` | POST：指定用户导入驱动的类；内置驱动不可修改 |
 | `/api/drivers/{id}` | DELETE：删除未引用的用户导入驱动；内置驱动不可删除 |
 | `/api/connections` | GET/POST：列出和保存连接 |
+| `/api/connections/demo` | POST：创建或复用服务端标记的内置 H2 内存演示连接；不执行 SQL |
 | `/api/connections/test` | POST：测试未保存/已有连接；还需检查 `data.success` |
 | `/api/connections/{id}` | DELETE：删除连接配置 |
 | `/api/connections/legacy` | GET：旧配置迁移状态 |
@@ -251,3 +252,9 @@ java -jar database-toolbox.jar --server.port=18080
 `CellEdits` 仅为 H2、PostgreSQL、MySQL InnoDB 开启写回。根据 JDBC 元数据引用标识符并绑定值；执行前复核表结构。自动提交时使用短事务，手动事务使用保存点。`SELECT … FOR UPDATE` 后按类型精确比较所选格原值，避免文本排序规则导致误判；UPDATE 必须影响一行。重新读取验证输入未被静默舍入/转换，数据库警告或触发器改写输入值也回滚本次保存。不会检查其他列是否改变，不保证检测删除后以相同主键/原值重建的记录。
 
 回滚失败时禁止通过恢复 autoCommit 隐式提交，关闭失效会话。厂商/驱动未经验证或元数据不足时保持只读，不能为了开放编辑绕过主键、事务或保存点检查。新增能力需补充 `CellEditingTest`、一次性厂商数据库检查和浏览器验证。
+
+### 连接向导
+
+`connection-fields.js` 仅将已知 MySQL/PostgreSQL 单主机 URL 映射为基础字段；未改变字段时保留原 URL，复杂 URL、未知驱动和 `<saved>` 留在完整 URL 模式。高级字段折叠不删除值。
+
+演示连接由加密 catalog 中服务端私有 `demoConnectionId` 标识；同名用户连接不复用，已修改的演示配置不覆盖。仅使用内置 H2，草稿默认关闭。演示 API 不建立 JDBC 会话或执行 SQL；前端创建新标签后按 prepare/submit 路径运行固定 SELECT 1。验收见 [连接向导](notes/features/CONNECTION_ONBOARDING.md)。

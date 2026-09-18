@@ -1613,3 +1613,10 @@ dialog.wide {
 .cell-null input {
   width: auto;
 }
+
+.connection-advanced summary { cursor: pointer; padding: 10px 0; color: var(--muted); }
+.connection-advanced > .form-grid { padding-top: 12px; }
+#connection-basic[hidden] { display: none; }
+.form-grid > .connection-advanced, .form-grid > #connection-basic { grid-column: 1 / -1; }
+
+.demo-entry { margin-bottom: 10px; }
