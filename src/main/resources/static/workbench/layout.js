@@ -226,17 +226,20 @@ export function createLayoutController({ onTabMove, beforeGesture } = {}) {
     item.classList.add("tab-dragging");
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.clearData();
       event.dataTransfer.setData("application/x-toolbox-tab", "tab");
     }
   });
   document.addEventListener("dragover", (event) => {
     if (!draggedTab?.isConnected) { clearDrop(); return; }
+    event.preventDefault();
     const target = event.target.closest?.(TAB_SELECTOR);
     if (!target || target === draggedTab || !target.isConnected ||
       !draggedTab.parentElement || target.parentElement !== draggedTab.parentElement ||
       !draggedTab.dataset.id || !target.dataset.id) {
       dropTab?.classList.remove("tab-drop-before", "tab-drop-after");
       dropTab = null;
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
       return;
     }
     event.preventDefault();

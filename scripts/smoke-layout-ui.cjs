@@ -91,6 +91,8 @@ async function assertHeader(viewportWidth) {
     'menubar must be inside the unified header');
   const bounds = await header.boundingBox();
   assert.ok(bounds && bounds.height < 65, `single header must stay below 65px at ${viewportWidth}px`);
+  assert.equal(await header.evaluate(el => el.scrollWidth > el.clientWidth), false,
+    `${viewportWidth}px header contents must fit without clipping`);
   assert.equal(await page.locator('.app-menubar').count(), 1);
   for (const kind of ['file', 'execution', 'view', 'help']) {
     assert.ok(await page.locator(`.app-header [data-menu-trigger="${kind}"]`).isVisible(), `${kind} menu must be visible`);
@@ -145,6 +147,8 @@ function assertLayoutStorage(raw) {
     assert.ok((await page.title()).trim(), 'page title must identify the app');
     assert.match(await page.locator('body').innerText(), /数据库工作台/);
     assert.equal(new URL(page.url()).origin, new URL(base).origin);
+    await assertHeader(1440);
+    await assertHeader(851);
     await assertHeader(1440);
     await page.locator('#global-connection').selectOption(connection.id);
     await page.locator('#tab-connection').selectOption(connection.id);
