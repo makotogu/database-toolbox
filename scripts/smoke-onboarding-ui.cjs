@@ -53,7 +53,8 @@ async function api(path, method='GET', body) {
   console.log('PASS fields: MySQL/PostgreSQL, IPv6, encoded names, validation, complex URL retained');
   const h2=drivers.find(d=>d.driverClass==='org.h2.Driver');
   const custom=await api('/connections','POST',{name:'Onboarding complex',driverId:h2.id,jdbcUrl:'jdbc:h2:mem:onboarding;DB_CLOSE_DELAY=-1;MODE=PostgreSQL',username:'sa',properties:{customOption:'private-fixture'}});created.add(custom.id);
-  await page.reload();await page.locator('[data-action=edit-connection][data-id="'+custom.id+'"]').click();
+  await page.reload();await page.locator('[data-menu-trigger=connection][data-id="'+custom.id+'"]').click();
+  await page.getByRole('menuitem', {name:'连接设置', exact:true}).click();
   assert.equal(await page.locator('#connection-mode').inputValue(),'url');
   assert.match(await page.locator('#f-jdbcUrl').inputValue(),/<saved>/);
   await page.locator('#f-username').fill('');await page.locator('#f-driverId').selectOption(h2.id);assert.equal(await page.locator('#f-username').inputValue(),'');await page.locator('#f-username').fill('sa');

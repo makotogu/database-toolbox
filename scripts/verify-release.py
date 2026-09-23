@@ -105,7 +105,8 @@ def main():
 
     with zipfile.ZipFile(artifact) as jar:
         entries = jar.namelist()
-        for resource in ("index.html", "workbench/app.js", "workbench/sql-highlight.js", "workbench/sql-drafts.js", "workbench/workbench.css", "workbench/favicon.svg"):
+        static_resources = ("index.html", "workbench/app.js", "workbench/connection-fields.js", "workbench/sql-highlight.js", "workbench/sql-drafts.js", "workbench/menus.js", "workbench/menus.css", "workbench/workbench.css", "workbench/favicon.svg")
+        for resource in static_resources:
             assert "BOOT-INF/classes/static/" + resource in entries
         assert not any(name.startswith("BOOT-INF/lib/") and any(word in name.lower() for word in ("h2-", "mysql-connector", "postgresql-")) for name in entries)
         assert not any("com/example/dbtoolbox/" + name + "/" in entry for name in ("sync", "backup", "job", "datasource") for entry in entries)
@@ -115,14 +116,15 @@ def main():
         for profile in catalog:
             for filename, expected_hash in zip(profile["files"], profile["sha256"]):
                 assert hashlib.sha256(jar.read("BOOT-INF/classes/bundled-drivers/" + filename)).hexdigest() == expected_hash
-    log("packaging", bundledStaticResources=6, bundledDriverProfiles=3, jdbcJarsOnApplicationClasspath=0)
+    log("packaging", bundledStaticResources=len(static_resources), bundledDriverProfiles=3, jdbcJarsOnApplicationClasspath=0)
     process = None
     try:
         process, token = start("first-start")
         assert len(list(directory.glob("*.jar"))) == 1
         log("empty_directory_start", directory=str(directory), version=api("GET", "/api/bootstrap")["version"])
-        for resource in ("/", "/workbench/app.js", "/workbench/sql-highlight.js", "/workbench/sql-drafts.js", "/workbench/workbench.css", "/workbench/favicon.svg"):
-            assert request("GET", resource)
+        assert request("GET", "/")
+        for resource in static_resources:
+            assert request("GET", "/" + resource)
         log("static_resources")
         saved_token, token = token, None
         denied("POST", "/api/sessions", {})
