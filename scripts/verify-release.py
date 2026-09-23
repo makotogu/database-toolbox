@@ -105,7 +105,7 @@ def main():
 
     with zipfile.ZipFile(artifact) as jar:
         entries = jar.namelist()
-        static_resources = ("index.html", "workbench/app.js", "workbench/connection-fields.js", "workbench/sql-highlight.js", "workbench/sql-drafts.js", "workbench/menus.js", "workbench/menus.css", "workbench/workbench.css", "workbench/favicon.svg")
+        static_resources = ("index.html", "workbench/app.js", "workbench/connection-fields.js", "workbench/sql-highlight.js", "workbench/sql-drafts.js", "workbench/menus.js", "workbench/menus.css", "workbench/layout.js", "workbench/layout.css", "workbench/workbench.css", "workbench/favicon.svg")
         for resource in static_resources:
             assert "BOOT-INF/classes/static/" + resource in entries
         assert not any(name.startswith("BOOT-INF/lib/") and any(word in name.lower() for word in ("h2-", "mysql-connector", "postgresql-")) for name in entries)

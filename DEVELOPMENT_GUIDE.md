@@ -209,6 +209,10 @@ data/migration-backups/legacy-v1/master.key
 
 单元格菜单绑定原结果行数组、执行 ID 和仍在页面内的单元格；替换结果会关闭菜单，触发动作前再次验证绑定。关闭标签进入 `closing` 忙状态并冻结编辑器，失败后恢复；SQL 保存状态与手动事务回滚确认分别判断。批量关闭按顺序等待每个 `closeTab`，遇到取消、忙状态或错误立即停止，不能并发发送一批会话 DELETE。
 
+`layout.js` 管理分隔线尺寸、键盘调整和标签拖放，`layout.css` 管理布局约束。`renderTab` 后调用 `layout.apply()` 重新绑定容器；ResizeObserver 按可用空间约束宽度/比例，重绘打断拖动时清理指针监听。布局偏好仅在浏览器 `toolbox.layout.v1` 中保存有限数值 `sidebarWidth/editorRatio`，读取校验、存储失败退回内存；禁止添加 SQL、标签名、连接 ID、结果或会话。菜单重置删除该项。SQL 文本保存仍由既有草稿协议负责。
+
+标签拖放只改变 `state.tabs` 顺序并移动原标签 DOM，不能重建编辑器、会话或结果。内部拖放使用专用 MIME 类型；拖到非标签区域时取消浏览器默认操作，防止文字落入 SQL 编辑器。窗口进入窄屏后收起导航，返回桌面恢复此前可见状态。
+
 轮询有单一调度入口和互斥标记；每个只读请求有 AbortController、15 秒读取截止时间及所属执行/连接标识校验。取消写请求使旧 poll 失效，但不会中断或重发写请求。读失败保留活动状态并重试读取。连接上下文和对象树刷新同样拒绝过时代次。执行状态变化只重绘当前标签，保留编辑器节点、焦点、选区和导航树。
 
 对象表/过程列表的当前请求超时进入明确错误状态，提供同一命名空间的“重试”，不缓存为空对象；被新请求替代的旧 Abort 响应直接丢弃。普通的部分读取失败仍保留成功的对象组，并显示另一组的错误。
@@ -224,6 +228,8 @@ data/migration-backups/legacy-v1/master.key
 编辑器逻辑回归：`node scripts/test-sql-editor.cjs`；沿用贡献指南的 Playwright 环境运行 `node scripts/smoke-sql-editor-ui.cjs`，仅对临时工作台实例执行。覆盖隐私开关、文本原样显示、选区执行、保存失败重试、多页面冲突、关闭清理和窄屏布局。验收记录见 [SQL 高亮与可选草稿](notes/features/SQL_EDITOR_DRAFTS.md)。
 
 菜单逻辑回归：`node scripts/test-menu-state.cjs`；真实浏览器检查先读 `node scripts/smoke-menus-ui.cjs --help`，使用相同 Playwright 环境和临时存储。覆盖键盘、禁用原因、独立标签、批量关闭中止、结构仅浏览与桌面/窄屏布局；记录见 [工作台菜单](notes/features/WORKBENCH_MENUS.md)。
+
+布局检查：先读 `node scripts/smoke-layout-ui.cjs --help`。沿用上述 Playwright 环境，验证实际指针拖动、键盘与重置、数值偏好恢复、单层顶部栏、标签排序后的 SQL/选区/会话保持，以及按新顺序关闭右侧标签。记录见 [单层顶部栏与拖拽布局](notes/features/UNIFIED_LAYOUT.md)。
 
 使用 JDK 8。macOS 可以先设置：
 
