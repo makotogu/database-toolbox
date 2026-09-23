@@ -1,0 +1,85 @@
+.workbench-popup-menu {
+  position: fixed;
+  z-index: 80;
+  width: max-content;
+  min-width: min(230px, calc(100vw - 16px));
+  max-width: min(380px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+  border: 1px solid var(--border, #dce2e4);
+  border-radius: var(--radius, 5px);
+  background: var(--panel, #fff);
+  color: var(--ink, #202d34);
+  box-shadow: 0 8px 24px #172f3e24, 0 2px 6px #172f3e12;
+}
+.workbench-popup-menu[hidden] { display: none; }
+.workbench-menu-title {
+  padding: 6px 11px 8px;
+  color: var(--muted, #61727b);
+  font-size: 11px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.workbench-menu-separator {
+  height: 1px;
+  margin: 5px 6px;
+  background: var(--border, #dce2e4);
+}
+.workbench-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 33px;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  text-align: left;
+  white-space: normal;
+}
+.workbench-menu-item:not(:disabled):hover,
+.workbench-menu-item:not(:disabled):focus {
+  background: var(--accent-bg, #e7f3f1);
+  color: var(--accent-hover, #06665f);
+}
+.workbench-menu-item:focus-visible {
+  outline: 2px solid var(--accent, #087b73);
+  outline-offset: -2px;
+}
+.workbench-menu-item:disabled {
+  opacity: 1;
+  color: var(--muted, #61727b);
+  cursor: default;
+}
+.workbench-menu-item:disabled:hover { background: transparent; }
+.workbench-menu-check { flex: 0 0 13px; text-align: center; }
+.workbench-menu-text { flex: 1; min-width: 0; }
+.workbench-menu-label { display: block; overflow-wrap: anywhere; }
+.workbench-menu-reason {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted, #61727b);
+  font-size: 11px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+.workbench-menu-shortcut {
+  flex: 0 0 auto;
+  margin-left: 14px;
+  color: var(--muted, #61727b);
+  font-size: 11px;
+  white-space: nowrap;
+}
+@media (max-width: 420px) {
+  .workbench-menu-item { gap: 5px; padding: 7px; }
+  .workbench-menu-shortcut { margin-left: 6px; }
+}
+@media (forced-colors: active) {
+  .workbench-popup-menu { border-color: CanvasText; }
+  .workbench-menu-item:disabled { color: GrayText; }
+}

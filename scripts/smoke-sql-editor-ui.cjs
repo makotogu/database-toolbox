@@ -13,7 +13,8 @@ async function api(path, method = 'GET', body) {
 }
 async function saved(p = page) { await p.waitForFunction(() => document.querySelector('#draft-status')?.textContent === '草稿已加密保存'); }
 async function editProfile(id) {
-  await page.locator('[data-action="edit-connection"][data-id="' + id + '"]').click();
+  await page.locator('[data-menu-trigger="connection"][data-id="' + id + '"]').click();
+  await page.getByRole('menuitem', {name:'连接设置', exact:true}).click();
   await page.locator('#connection-form').waitFor();
 }
 function monitor(p) {

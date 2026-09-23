@@ -1,6 +1,7 @@
 import { installConnectionFields } from "./connection-fields.js";
 import { highlightSql } from "./sql-highlight.js";
 import { createDraftManager } from "./sql-drafts.js";
+import { createMenuController } from "./menus.js";
 
 const icons = {
   database:
@@ -83,9 +84,13 @@ const state = {
   activeTab: "",
   sequence: 0,
   search: "",
-  sidebarOpen: false,
+  sidebarOpen: window.innerWidth > 620,
 };
 let pollTimer, polling = false;
+const menus = createMenuController();
+const modifierLabel = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
+let closingTabs = false;
+let cellMenuOpen = false;
 const readRequests = new Map();
 function beginRead(key) {
   abortRead(key);
@@ -112,7 +117,7 @@ function invalidateTree(id) {
 let cellEditor;
 const tab = () => state.tabs.find((t) => t.id === state.activeTab);
 const connection = (id) => state.connections.find((c) => c.id === id);
-const busy = (t) => !!t?.submitting || !!t?.transactionPending || !!t?.cancelInFlight || !!t?.recovering || activeStates.has(t?.execution?.state);
+const busy = (t) => !!t?.closing || !!t?.submitting || !!t?.transactionPending || !!t?.cancelInFlight || !!t?.recovering || activeStates.has(t?.execution?.state);
 
 async function api(path, options = {}) {
   const opts = { ...options, headers: { ...options.headers } };
@@ -208,6 +213,7 @@ function options(items, value, empty) {
   );
 }
 function showDialog(title, content, footer = "", wide = false) {
+  menus.close({restoreFocus:false});
   const d = $("#dialog");
   if (d.open) d.close();
   d.className = wide ? "wide" : "";
@@ -279,9 +285,10 @@ function newTab(spec = {}, restoring = false) {
   return t;
 }
 function render() {
+  menus.close({restoreFocus:false});
   const t = tab();
   $("#app").innerHTML =
-    `<header class="app-header">${button("", "sidebar-toggle", "layout", "ghost icon-btn split-toggle", 'aria-label="显示或隐藏对象导航"')}<div class="brand"><span class="brand-mark">${icon("database")}</span>数据库工作台 <span class="version">V2</span></div><div class="header-context"><span class="context-label">连接</span><select id="global-connection" aria-label="当前连接">${options(state.connections, state.selectedConnection, "选择数据库连接")}</select></div><span class="spacer"></span><span class="local-label"><i class="dot online"></i>本机工作区</span>${button('<span class="button-label">新建 SQL</span>', "new-tab", "plus")}${button('<span class="button-label">驱动管理</span>', "drivers", "driver", "ghost")}${button("", "execution-settings", "settings", "ghost icon-btn", 'title="当前标签执行设置" aria-label="当前标签执行设置"')}${button("", "shortcuts", "keyboard", "ghost icon-btn", 'title="键盘快捷键" aria-label="键盘快捷键"')}</header><div class="workspace ${state.sidebarOpen ? "sidebar-open" : ""}"><aside class="sidebar"><div class="sidebar-head"><strong>数据库导航</strong><span class="spacer"></span>${button("", "new-connection", "plus", "ghost icon-btn", 'title="新建连接" aria-label="新建连接"')}${button("", "refresh-tree", "refresh", "ghost icon-btn", 'title="刷新对象" aria-label="刷新对象"')}</div><div class="search-box">${icon("search")}<input id="object-search" value="${esc(state.search)}" placeholder="筛选对象名称" aria-label="筛选对象名称"></div><div id="tree" class="tree"></div><div class="sidebar-footer"><div class="demo-entry">${button("试用 H2", "demo-connection", "play", "ghost small")}</div><strong>${icon("link")} 每个标签独立连接</strong>关闭标签会回滚未提交事务</div></aside><main class="main"><div class="tab-strip"><div class="tabs" role="tablist" aria-label="工作区标签">${state.tabs.map((x) => `<button class="work-tab ${x.id === state.activeTab ? "active" : ""}" role="tab" aria-selected="${x.id === state.activeTab}" data-action="select-tab" data-id="${x.id}" title="${esc(x.name)}">${icon(x.type === "table" ? "table" : x.type === "routine" ? "code" : "file")}<span class="tab-label">${esc(x.name)}</span>${busy(x) ? '<i class="loading-dot"></i>' : ""}<span class="close-tab" data-action="close-tab" data-id="${x.id}" role="button" tabindex="0" aria-label="关闭 ${esc(x.name)}">${icon("close")}</span></button>`).join("")}</div>${button("", "new-tab", "plus", "ghost icon-btn", 'title="新建 SQL 标签" aria-label="新建 SQL 标签"')}</div><div id="tab-body" class="tab-body"></div></main></div><footer id="status-bar" class="status-bar"></footer>`;
+    `<header class="app-header">${button("", "sidebar-toggle", "layout", "ghost icon-btn split-toggle", 'aria-label="显示或隐藏对象导航"')}<div class="brand"><span class="brand-mark">${icon("database")}</span>数据库工作台 <span class="version">V2</span></div><div class="header-context"><span class="context-label">连接</span><select id="global-connection" aria-label="当前连接">${options(state.connections, state.selectedConnection, "选择数据库连接")}</select></div><span class="spacer"></span><span class="local-label"><i class="dot online"></i>本机工作区</span>${button('<span class="button-label">新建 SQL</span>', "new-tab", "plus")}${button('<span class="button-label">驱动管理</span>', "drivers", "driver", "ghost")}${button("", "execution-settings", "settings", "ghost icon-btn", 'title="当前标签执行设置" aria-label="当前标签执行设置"')}${button("", "shortcuts", "keyboard", "ghost icon-btn", 'title="键盘快捷键" aria-label="键盘快捷键"')}</header>${menuBar()}<div class="workspace ${state.sidebarOpen ? "sidebar-open" : ""}"><aside class="sidebar"><div class="sidebar-head"><strong>数据库导航</strong><span class="spacer"></span>${button("", "new-connection", "plus", "ghost icon-btn", 'title="新建连接" aria-label="新建连接"')}${button("", "refresh-tree", "refresh", "ghost icon-btn", 'title="刷新对象" aria-label="刷新对象"')}</div><div class="search-box">${icon("search")}<input id="object-search" value="${esc(state.search)}" placeholder="筛选对象名称" aria-label="筛选对象名称"></div><div id="tree" class="tree"></div><div class="sidebar-footer"><div class="demo-entry">${button("试用 H2", "demo-connection", "play", "ghost small")}</div><strong>${icon("link")} 每个标签独立连接</strong>关闭标签会回滚未提交事务</div></aside><main class="main"><div class="tab-strip"><div class="tabs" role="tablist" aria-label="工作区标签">${state.tabs.map((x) => `<button class="work-tab ${x.id === state.activeTab ? "active" : ""}" role="tab" aria-selected="${x.id === state.activeTab}" data-action="select-tab" data-id="${x.id}" title="${esc(x.name)}">${icon(x.type === "table" ? "table" : x.type === "routine" ? "code" : "file")}<span class="tab-label">${esc(x.name)}</span>${busy(x) ? '<i class="loading-dot"></i>' : ""}<span class="close-tab" data-action="close-tab" data-id="${x.id}" role="button" tabindex="0" aria-label="关闭 ${esc(x.name)}">${icon("close")}</span></button>`).join("")}</div>${button("", "new-tab", "plus", "ghost icon-btn", 'title="新建 SQL 标签" aria-label="新建 SQL 标签"')}${menuButton("tabs", "", "标签操作")}</div><div id="tab-body" class="tab-body"></div></main></div><footer id="status-bar" class="status-bar"></footer>`;
   renderTree();
   renderTab(t);
   renderStatus();
@@ -296,7 +303,7 @@ function renderTree() {
   root.innerHTML = state.connections
     .map((c) => {
       const open = state.expanded.has(c.id);
-      return `<div class="tree-row ${c.id === state.selectedConnection ? "active" : ""}"><button class="row-main" data-action="toggle-connection" data-id="${c.id}">${icon(open ? "down" : "chevron")}${icon("database")}<span>${esc(c.name)}</span></button>${button("", "edit-connection", "more", "ghost icon-btn", `data-id="${c.id}" title="连接设置" aria-label="编辑 ${esc(c.name)}"`)}</div>${open ? renderConnectionTree(c) : ""}`;
+      return `<div class="tree-row ${c.id === state.selectedConnection ? "active" : ""}"><button class="row-main" data-action="toggle-connection" data-id="${c.id}">${icon(open ? "down" : "chevron")}${icon("database")}<span>${esc(c.name)}</span></button>${menuButton("connection", "", `连接操作：${c.name}`, `data-id="${c.id}"`)}</div>${open ? renderConnectionTree(c) : ""}`;
     })
     .join("");
 }
@@ -328,7 +335,7 @@ function renderObjects(c, scope, key) {
   return `<div class="tree-children">${groups
     .map(([title, ico, objects, error]) => {
       const shown = objects.filter((o) => o.name.toLowerCase().includes(query));
-      return `<div class="tree-section">${icon(ico)}<span>${title}</span>${shown.length}</div>${error ? `<div class="tree-error">${esc(error)}</div>` : ""}${shown.map((o) => `<div class="tree-row"><button class="row-main" data-action="open-object" data-id="${c.id}" data-object="${esc(JSON.stringify({ ...o, catalog: o.catalog ?? scope.catalog, schema: o.schema ?? scope.schema, kind: ico === "table" ? "table" : "routine" }))}" title="${esc(o.type || "")} · ${esc(o.name)}">${icon(ico)}<span>${esc(o.name)}</span></button></div>`).join("")}${!shown.length && !error ? '<div class="tree-empty">' + (query ? "没有匹配的对象" : "无对象") + "</div>" : ""}`;
+      return `<div class="tree-section">${icon(ico)}<span>${title}</span>${shown.length}</div>${error ? `<div class="tree-error">${esc(error)}</div>` : ""}${shown.map((o) => `<div class="tree-row"><button class="row-main" data-action="open-object" data-id="${c.id}" data-object="${esc(JSON.stringify({ ...o, catalog: o.catalog ?? scope.catalog, schema: o.schema ?? scope.schema, kind: ico === "table" ? "table" : "routine" }))}" title="${esc(o.type || "")} · ${esc(o.name)}">${icon(ico)}<span>${esc(o.name)}</span></button>${menuButton("object", "", `对象操作：${o.name}`, `data-id="${c.id}" data-object="${esc(JSON.stringify({ ...o, catalog: o.catalog ?? scope.catalog, schema: o.schema ?? scope.schema, kind: ico === "table" ? "table" : "routine" }))}"`)}</div>`).join("")}${!shown.length && !error ? '<div class="tree-empty">' + (query ? "没有匹配的对象" : "无对象") + "</div>" : ""}`;
     })
     .join("")}</div>`;
 }
@@ -440,6 +447,7 @@ function renderTab(t) {
   if (t.type !== "table") {
     const ed = $("#sql-editor");
     ed.value = t.sql;
+    ed.readOnly = !!t.closing;
     ed.setSelectionRange(...t.selection);
     ed.scrollTop = t.scrollTop || 0;
     ed.scrollLeft = t.scrollLeft || 0;
@@ -452,7 +460,7 @@ function renderTab(t) {
 }
 function editorToolbar(t) {
   const disabled = busy(t) ? "disabled" : "";
-  return `<div class="toolbar">${button('执行当前 <kbd class="shortcut-key">⌘ ↵</kbd>', "execute-current", "play", "primary", disabled)}${button("选区", "execute-selection", null, "", disabled)}${button("整块", "execute-block", null, "", disabled)}${button("脚本", "execute-script", null, "", disabled)}<span class="divider"></span>${button("EXPLAIN", "explain", "branch", "", disabled)}${button("实际分析", "analyze", null, "", disabled + ' title="EXPLAIN ANALYZE 会真正执行语句"')}${button("取消", "cancel", "stop", "ghost", activeStates.has(t.execution?.state) ? "" : "disabled")}<span class="spacer"></span>${transactionControls(t)}<span class="divider"></span>${button("", "open-sql", "open", "ghost icon-btn", 'title="打开 SQL 文件" aria-label="打开 SQL 文件"')}${button("", "save-sql", "save", "ghost icon-btn", 'title="保存 SQL 文件" aria-label="保存 SQL 文件"')}</div>`;
+  return `<div class="toolbar">${button(`执行当前 <kbd class="shortcut-key">${modifierLabel} ↵</kbd>`, "execute-current", "play", "primary", disabled)}${button("选区", "execute-selection", null, "", disabled)}${button("整块", "execute-block", null, "", disabled)}${button("脚本", "execute-script", null, "", disabled)}<span class="divider"></span>${button("EXPLAIN", "explain", "branch", "", disabled)}${button("实际分析", "analyze", null, "", disabled + ' title="EXPLAIN ANALYZE 会真正执行语句"')}${button("取消", "cancel", "stop", "ghost", activeStates.has(t.execution?.state) ? "" : "disabled")}<span class="spacer"></span>${transactionControls(t)}<span class="divider"></span>${button("", "open-sql", "open", "ghost icon-btn", 'title="打开 SQL 文件" aria-label="打开 SQL 文件"')}${button("", "save-sql", "save", "ghost icon-btn", 'title="保存 SQL 文件" aria-label="保存 SQL 文件"')}</div>`;
 }
 function transactionControls(t) {
   const unavailable = busy(t) || t.session?.state === "BROKEN" || t.session?.state === "CLOSED" || t.session?.resourceReleased;
@@ -495,6 +503,7 @@ function allResults(t) {
 function renderResults(t) {
   const el = $("#results");
   if (!el || tab() !== t) return;
+  if (cellMenuOpen) {menus.close({restoreFocus:false});cellMenuOpen=false;}
   if (t.type === "table" && t.tableView === "structure") {
     el.innerHTML = `<div class="result-tabs"><span class="result-heading">表结构</span><span class="result-state">${esc(t.object.schema || t.object.catalog || "")}</span></div><div class="result-body">${t.structure ? renderStructure(t.structure) : '<div class="empty-state">正在读取字段、索引与外键…</div>'}</div>`;
     return;
@@ -1148,7 +1157,7 @@ async function saveConnection(test = false) {
     if (btn.isConnected) btn.disabled = false;
   }
 }
-async function openObject(connectionId, obj) {
+async function openObject(connectionId, obj, view = "data") {
   const existing = state.tabs.find(
     (t) =>
       t.type === obj.kind &&
@@ -1160,8 +1169,11 @@ async function openObject(connectionId, obj) {
   );
   if (existing) {
     rememberEditor();
+    captureTableFilters(tab());
     state.activeTab = existing.id;
+    if (obj.kind === "table") existing.tableView = view;
     render();
+    if (obj.kind === "table" && view === "data" && !existing.execution && !existing.loading) await readTable(existing);
     return;
   }
   state.selectedConnection = connectionId;
@@ -1173,11 +1185,11 @@ async function openObject(connectionId, obj) {
     schema: obj.schema || "",
     catalog: obj.catalog || "",
     loading: true,
-    tableView: "data",
+    tableView: view,
     offset: 0,
     parameters: [],
   });
-  state.sidebarOpen = false;
+  if (window.innerWidth <= 620) state.sidebarOpen = false;
   try {
     const q = new URLSearchParams({
       catalog: obj.catalog || "",
@@ -1191,7 +1203,7 @@ async function openObject(connectionId, obj) {
       t.loading = false;
       if (tab() === t) {
         render();
-        await readTable(t);
+        if (t.tableView === "data") await readTable(t);
       }
     } else {
       q.set("name", obj.name);
@@ -1285,26 +1297,20 @@ async function readTable(t, offset, apply = false) {
 }
 async function closeTab(id) {
   const t = state.tabs.find((x) => x.id === id);
-  if (!t) return;
+  if (!t) return true;
   if (busy(t)) {
-    toast("请先取消当前标签中正在运行的执行。", true);
-    return;
+    toast(t.closing ? "正在关闭此标签，请稍候。" : "请先取消当前标签中正在运行的执行。", true);
+    return false;
   }
   rememberEditor();
-  if (
-    t.sql.trim() &&
-    (t.savedSql !== t.sql || (t.type === "sql" && connection(t.connectionId)?.saveSqlDrafts)) &&
-    !confirm(
-      `关闭「${t.name}」？${t.type === "sql" && connection(t.connectionId)?.saveSqlDrafts ? "对应草稿也会删除；需要保留请先下载 SQL 文件。" : "SQL 文本不会自动保存。"}${t.session?.autoCommit === false ? "未提交事务将回滚。" : ""}`,
-    )
-  )
-    return;
-  if (
-    t.session?.autoCommit === false &&
-    !t.sql.trim() &&
-    !confirm("关闭标签将回滚未提交事务。继续关闭？")
-  )
-    return;
+  const warnings=[];
+  if(t.sql.trim() && (t.savedSql!==t.sql || (t.type==="sql"&&connection(t.connectionId)?.saveSqlDrafts)))
+    warnings.push(t.type==="sql"&&connection(t.connectionId)?.saveSqlDrafts ? "对应草稿也会删除；需要保留请先下载 SQL 文件。" : "SQL 文本不会自动保存。");
+  if(t.session?.autoCommit===false) warnings.push("未提交事务将回滚。");
+  if(warnings.length && !confirm(`关闭「${t.name}」？${warnings.join("")}`)) return false;
+  t.closing=true;
+  if(t===tab()) {const editor=$("#sql-editor");if(editor)editor.readOnly=true;renderExecutionChange(t);}
+  try {
   if (t.session) await api(`/sessions/${t.session.id}`, { method: "DELETE" });
   if (t.execution?.id && !activeStates.has(t.execution.state))
     await api(`/executions/${t.execution.id}`, { method: "DELETE" }).catch(
@@ -1320,6 +1326,11 @@ async function closeTab(id) {
     render();
   }
   if (tab()?.restoreContext) loadContext(tab());
+  return true;
+  } finally {
+    t.closing=false;
+    if(state.tabs.includes(t)&&t===tab()) {const editor=$("#sql-editor");if(editor)editor.readOnly=false;renderExecutionChange(t);}
+  }
 }
 function saveSql() {
   rememberEditor();
@@ -1352,7 +1363,7 @@ async function copyText(value) {
   }
   toast("已复制到剪贴板。");
 }
-function cellDetail(cell) {
+function cellDetail(cell, viewOnly = false) {
   const t = tab(),
     key = cell.dataset.result,
     ri = Number(cell.dataset.row),
@@ -1360,7 +1371,7 @@ function cellDetail(cell) {
   let value, label;
   if (/^\d+$/.test(key)) {
     selectCell(cell);
-    if (t.type === "table") return editCellDialog(t, Number(key), ri, ci);
+    if (t.type === "table" && !viewOnly) return editCellDialog(t, Number(key), ri, ci);
   }
   if (key.startsWith("structure-")) {
     const items = t.structure[key.slice(10)] || [],
@@ -1548,7 +1559,124 @@ async function saveCell() {
     if (t === tab()) render();
   }
 }
+function menuButton(kind, label, description, extra = "") {
+  return `<button class="ghost ${label ? "menu-trigger" : "icon-btn"}" data-menu-trigger="${kind}" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(description)}" title="${esc(description)}" ${extra}>${label || icon("more")}</button>`;
+}
+function menuBar() {
+  return `<nav class="app-menubar" aria-label="工作台菜单">${[["file","文件"],["execution","执行"],["view","视图"],["help","帮助"]].map(([key,label])=>menuButton(key,label,`${label}菜单`)).join("")}<span class="spacer"></span><span class="menu-hint">右键对象或标签查看更多操作</span></nav>`;
+}
+function menuCommand(label, run, reason = () => "", extra = {}) {
+  const unavailable = reason();
+  return {label, disabled:!!unavailable, reason:unavailable, ...extra, run:() => Promise.resolve().then(() => {
+    const changed = reason();
+    if (changed) return toast(changed, true);
+    return run();
+  }).catch(report)};
+}
+const menuSeparator = {separator:true};
+function tabUnavailable(t) {
+  return !state.tabs.includes(t) ? "标签已关闭" : busy(t) ? "请等待当前执行结束" : t.loading ? "正在读取对象信息" : "";
+}
+function selectTab(t) {
+  if (!state.tabs.includes(t)) return false;
+  rememberEditor();captureTableFilters(tab());
+  if (t !== tab()) {state.activeTab=t.id;render();}
+  if (t.restoreContext) loadContext(t);
+  return true;
+}
+function actionReason(name, t) {
+  if (!state.tabs.includes(t)) return "标签已关闭";
+  if (["execute-current","execute-selection","execute-block","execute-script","explain","analyze"].includes(name)) {
+    return tabUnavailable(t) || (t.type === "table" ? "请切换到 SQL 标签" : !t.connectionId ? "请先选择连接" : !t.sql.trim() ? "请先输入 SQL" : name === "execute-selection" && t.selection?.[0]===t.selection?.[1] ? "请先选择要执行的 SQL" : "");
+  }
+  if (["commit","rollback"].includes(name)) return tabUnavailable(t) || (!t.session || t.session.autoCommit ? "当前没有手动事务" : ["BROKEN","CLOSED"].includes(t.session.state) || t.session.resourceReleased ? "请先恢复会话" : "");
+  if (name === "disconnect") return tabUnavailable(t) || (!t.session ? "当前标签尚未建立会话" : "");
+  if (name === "cancel") return !activeStates.has(t.execution?.state) || t.cancelInFlight ? "当前没有可取消的执行" : "";
+  if (name === "save-sql") return t.type === "table" ? "请先生成 SQL 模板" : !t.sql ? "当前 SQL 为空" : "";
+  if (["table-read","table-data","table-structure"].includes(name)) return tabUnavailable(t) || (t.type !== "table" ? "请先打开表" : "");
+  if (name === "copy-results") return !allResults(t)[t.resultIndex]?.rows ? "当前结果不是数据表格" : "";
+  return "";
+}
+function tabCommand(label, name, t, extra) {
+  return menuCommand(label, () => {if(selectTab(t)) return actions[name]();}, () => actionReason(name,t), extra);
+}
+function tabMenu(t) {
+  const onlySql = () => tabUnavailable(t) || (t.type !== "sql" ? "仅普通 SQL 标签支持此操作" : "");
+  const closeReason = () => closingTabs ? "正在关闭标签" : tabUnavailable(t);
+  return [
+    menuCommand("重命名标签", () => {
+      showDialog("重命名标签", field("标签名称","tabName",t.name,"text","最多 200 个字符。"),
+        `${button("取消","dialog-close")}${button("保存名称","rename-tab-save","check","primary",`data-id="${t.id}"`)}`);
+      $("#f-tabName").maxLength=200;$("#f-tabName").select();
+    }, onlySql),
+    menuCommand("复制 SQL 到新标签", () => newTab({name:`${t.name} 副本`.slice(0,200),sql:t.sql,connectionId:t.connectionId,schema:t.schema,catalog:t.catalog,maxRows:t.maxRows,timeoutSeconds:t.timeoutSeconds}), onlySql),
+    menuSeparator,
+    menuCommand("关闭当前标签", () => closeTab(t.id), closeReason),
+    menuCommand("关闭其他标签", () => closeTabs(t,"others"), () => closeReason() || (state.tabs.length<2 ? "没有其他标签" : "")),
+    menuCommand("关闭右侧标签", () => closeTabs(t,"right"), () => closeReason() || (state.tabs.indexOf(t)===state.tabs.length-1 ? "右侧没有标签" : "")),
+  ];
+}
+async function closeTabs(t, side) {
+  if (closingTabs || !state.tabs.includes(t)) return;
+  const targets = side === "right" ? state.tabs.slice(state.tabs.indexOf(t)+1) : state.tabs.filter(x=>x!==t);
+  closingTabs=true;
+  try {for (const target of targets) if (!await closeTab(target.id)) break;}
+  finally {closingTabs=false;}
+}
+function mainMenu(kind, t) {
+  switch (kind) {
+    case "file": return [menuCommand("新建 SQL",()=>newTab(),undefined,{shortcut:`${modifierLabel}+Alt+N`}),menuCommand("打开 SQL 文件",()=>actions["open-sql"]()),tabCommand("保存 SQL 文件","save-sql",t,{shortcut:`${modifierLabel}+S`}),menuSeparator,menuCommand("新建连接",()=>connectionDialog()),menuCommand("驱动管理",driversDialog),menuCommand("试用 H2",openDemo)];
+    case "execution": return [tabCommand("执行当前语句","execute-current",t,{shortcut:`${modifierLabel}+Enter`}),tabCommand("执行选区","execute-selection",t,{shortcut:`${modifierLabel}+Shift+Enter`}),tabCommand("执行完整代码块","execute-block",t),tabCommand("顺序执行脚本","execute-script",t),menuSeparator,tabCommand("查看执行计划（EXPLAIN）","explain",t),tabCommand("实际分析（会执行 SQL）","analyze",t),tabCommand("取消执行","cancel",t),menuSeparator,tabCommand("提交事务","commit",t),tabCommand("回滚事务","rollback",t),tabCommand("断开当前标签会话","disconnect",t),tabCommand("当前标签执行设置","execution-settings",t)];
+    case "view": return [menuCommand("显示对象导航",()=>actions["sidebar-toggle"](),undefined,{checked:state.sidebarOpen}),menuCommand("筛选对象",()=>{
+      state.sidebarOpen=true;$(".workspace").classList.add("sidebar-open");$("#object-search").focus();
+    }),menuCommand("刷新当前连接对象",()=>actions["refresh-tree"](),()=>!state.selectedConnection?"请先选择连接":""),menuSeparator,tabCommand("查看表结构","table-structure",t),tabCommand("查看表数据","table-data",t),tabCommand("重新读取表数据","table-read",t),tabCommand("复制当前结果","copy-results",t)];
+    case "help": return [menuCommand("键盘快捷键",()=>actions.shortcuts()),menuCommand("关于数据库工作台",()=>showDialog("关于数据库工作台",'<p>本地 JDBC 数据库工作台 · V2</p><p class="form-note">每个标签使用独立会话。关闭标签会回滚未提交事务。表预览中的普通字段可按 Enter 或双击编辑；主键、生成列及无法确认的字段保持只读。</p><p class="form-note">SQL 文件可手动保存；SQL 草稿需在连接设置中单独开启。当前菜单支持方向键选择、Enter 确认、Esc 关闭。</p>'))];
+    case "tabs": return tabMenu(t);
+    default: return [];
+  }
+}
+function objectMenu(el) {
+  const id=el.dataset.id, obj=JSON.parse(el.dataset.object);
+  const available=()=>!connection(id)?"连接已删除":"";
+  const open=view=>openObject(id,obj,view);
+  return {title:obj.name,items:[...(obj.kind==="table" ? [menuCommand("查看数据",()=>open("data"),available),menuCommand("查看结构",()=>open("structure"),available)] : [menuCommand("打开过程 / 函数",()=>open(),available)]),menuSeparator,menuCommand("复制对象名称",()=>copyText(obj.name),available)]};
+}
+function connectionMenu(el) {
+  const id=el.dataset.id, c=connection(id), available=()=>!connection(id)?"连接已删除":"";
+  return {title:c?.name||"连接",items:[menuCommand("新建 SQL",()=>newTab({connectionId:id}),available),menuCommand("刷新对象",()=>loadTree(id,true),available),menuCommand("连接设置",()=>connectionDialog(id),available)]};
+}
+function cellMenu(cell) {
+  selectCell(cell);
+  const t=tab(), index=Number(cell.dataset.result), row=Number(cell.dataset.row), col=Number(cell.dataset.column);
+  const result=allResults(t)[index], execution=t.execution?.id;
+  if (!/^\d+$/.test(cell.dataset.result)||!result?.columns?.[col]||!result.rows?.[row]) return null;
+  const valid=()=>!cell.isConnected||!state.tabs.includes(t)||tab()!==t||t.execution?.id!==execution||allResults(t)[index]?.rows!==result.rows ? "结果已变化，请重新选择单元格" : "";
+  return {title:result.columns[col].label,items:[menuCommand("查看单元格",()=>cellDetail(cell,true),valid),menuCommand("编辑单元格",()=>editCellDialog(t,index,row,col),()=>valid()||cellReadOnly(t,result,row,col)),menuCommand("复制单元格值",()=>copyText(result.rows[row][col]==null?"NULL":formatValue(result.rows[row][col])),valid)]};
+}
+function openMenu(el, event) {
+  if ($("#dialog").open) return false;
+  rememberEditor();captureTableFilters(tab());
+  const kind=el.dataset.menuTrigger;
+  let definition;
+  if (kind==="object"||el.dataset.action==="open-object") definition=objectMenu(el);
+  else if(kind==="connection"||el.dataset.action==="toggle-connection") definition=connectionMenu(el);
+  else if(el.dataset.action==="select-tab") {
+    const t=state.tabs.find(x=>x.id===el.dataset.id);if(!t)return false;
+    definition={title:t.name,items:tabMenu(t)};
+  } else if(el.matches("[data-cell]")) definition=cellMenu(el);
+  else definition={title:el.getAttribute("aria-label"),items:mainMenu(kind,tab())};
+  if(!definition)return false;
+  cellMenuOpen=el.matches("[data-cell]");
+  menus.open({anchor:el,...definition,...(event?.type==="contextmenu"?{x:event.clientX,y:event.clientY}:{})});
+  return true;
+}
 const actions = {
+  "rename-tab-save": el => {
+    const t=state.tabs.find(x=>x.id===el.dataset.id), name=$("#f-tabName").value.trim();
+    if (!t||t.type!=="sql") return;
+    if (!name||name.length>200) throw new Error("标签名称需为 1–200 个字符。");
+    rememberEditor();t.name=name;drafts.schedule();$("#dialog").close();render();
+  },
   "edit-selected-cell": () => {
     const t = tab(),
       selected = t?.selectedCell;
@@ -1701,6 +1829,7 @@ const actions = {
     openObject(el.dataset.id, JSON.parse(el.dataset.object)),
   "select-tab": (el) => {
     rememberEditor();
+    captureTableFilters(tab());
     state.activeTab = el.dataset.id;
     render();
     if (tab()?.restoreContext) loadContext(tab());
@@ -1771,9 +1900,11 @@ const actions = {
     renderTab(tab());
   },
   "table-data": () => {
-    captureTableFilters(tab());
-    tab().tableView = "data";
-    renderTab(tab());
+    const t = tab();
+    captureTableFilters(t);
+    t.tableView = "data";
+    renderTab(t);
+    if (!t.execution && !t.loading && !busy(t)) return readTable(t);
   },
   "filter-add": () => {
     const t = tab(); if (busy(t)) return; captureTableFilters(t);
@@ -1860,7 +1991,7 @@ const actions = {
   shortcuts: () =>
     showDialog(
       "键盘快捷键",
-      `<div class="shortcut-list"><span>执行当前语句</span><kbd>⌘ / Ctrl + Enter</kbd><span>执行选区</span><kbd>⌘ / Ctrl + Shift + Enter</kbd><span>新建 SQL 标签</span><kbd>⌘ / Ctrl + Alt + N</kbd><span>保存 SQL 文件</span><kbd>⌘ / Ctrl + S</kbd><span>缩进 / 取消缩进</span><kbd>Tab / Shift + Tab</kbd><span>查看单元格</span><kbd>Enter / 双击</kbd></div><p class="form-note" style="margin-top:21px">「整块」完整发送选区或全部文本，保留过程体内部分号；「脚本」由后端识别边界，再顺序执行。SQL 可手动下载为文件；连接开启“保存 SQL 草稿”后，文本还会自动加密保存在本机。草稿不会自动执行。</p>`,
+      `<div class="shortcut-list"><span>执行当前语句</span><kbd>⌘ / Ctrl + Enter</kbd><span>执行选区</span><kbd>⌘ / Ctrl + Shift + Enter</kbd><span>新建 SQL 标签</span><kbd>⌘ / Ctrl + Alt + N</kbd><span>保存 SQL 文件</span><kbd>⌘ / Ctrl + S</kbd><span>缩进 / 取消缩进</span><kbd>Tab / Shift + Tab</kbd><span>查看 / 编辑单元格</span><kbd>Enter / 双击</kbd><span>打开对象或标签菜单</span><kbd>右键 / Shift + F10</kbd><span>切换已聚焦的标签</span><kbd>← / → / Home / End</kbd><span>菜单选择 / 关闭</span><kbd>↑ / ↓ / Enter / Esc</kbd></div><p class="form-note" style="margin-top:21px">「整块」完整发送选区或全部文本，保留过程体内部分号；「脚本」由后端识别边界，再顺序执行。SQL 可手动下载为文件；连接开启“保存 SQL 草稿”后，文本还会自动加密保存在本机。草稿不会自动执行。</p>`,
     ),
 };
 // Never let a browser form navigation put connection credentials in the URL.
@@ -1881,6 +2012,8 @@ document.addEventListener("focusin", (e) => {
   if (cell) selectCell(cell);
 });
 document.addEventListener("click", (e) => {
+  const trigger = e.target.closest("[data-menu-trigger]");
+  if (trigger) {e.preventDefault();openMenu(trigger);return;}
   const cell = e.target.closest("[data-cell]");
   if (cell) selectCell(cell);
   const target = e.target.closest("[data-action]");
@@ -1892,6 +2025,11 @@ document.addEventListener("click", (e) => {
     Promise.resolve()
       .then(() => action(target))
       .catch(report);
+});
+document.addEventListener("contextmenu", e => {
+  if ($("#dialog").open) return;
+  const target=e.target.closest('[data-cell], [data-action="select-tab"], [data-action="open-object"], [data-action="toggle-connection"]');
+  if (target && openMenu(target,e)) e.preventDefault();
 });
 document.addEventListener("pointerdown", (e) => {
   const handle = e.target.closest(".column-resize");
@@ -2011,6 +2149,18 @@ function updateCursor() {
   pos.textContent = `行 ${lines.length}，列 ${lines[lines.length - 1].length + 1}${ed.selectionStart !== ed.selectionEnd ? " · 已选择 " + (ed.selectionEnd - ed.selectionStart) + " 字符" : ""}`;
 }
 document.addEventListener("keydown", (e) => {
+  if ($("#dialog").open || menus.isOpen()) return;
+  const menuTarget=e.target.closest?.('[data-menu-trigger], [data-action="select-tab"], [data-action="open-object"], [data-action="toggle-connection"], [data-cell]');
+  if (menuTarget && (e.key==="ContextMenu" || (e.shiftKey&&e.key==="F10") || (menuTarget.dataset.menuTrigger&&e.key==="ArrowDown"))) {
+    e.preventDefault();openMenu(menuTarget);return;
+  }
+  const tabTarget=e.target.closest?.('[role="tab"][data-action="select-tab"]');
+  if (tabTarget && !e.metaKey && !e.ctrlKey && ["ArrowLeft","ArrowRight","Home","End"].includes(e.key)) {
+    e.preventDefault();
+    const index=state.tabs.findIndex(t=>t.id===tabTarget.dataset.id), last=state.tabs.length-1;
+    const next=e.key==="Home"?0:e.key==="End"?last:(index+(e.key==="ArrowRight"?1:last))%state.tabs.length;
+    selectTab(state.tabs[next]);$(`[data-action="select-tab"][data-id="${state.tabs[next].id}"]`).focus();return;
+  }
   const mod = e.metaKey || e.ctrlKey;
   if (
     e.target.matches?.(".column-resize") &&
@@ -2058,7 +2208,7 @@ document.addEventListener("keydown", (e) => {
     newTab();
     return;
   }
-  if (e.target.id === "sql-editor" && e.key === "Tab") {
+  if (e.target.id === "sql-editor" && !e.target.readOnly && e.key === "Tab") {
     e.preventDefault();
     const ed = e.target,
       start = ed.selectionStart,
