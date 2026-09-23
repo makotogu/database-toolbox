@@ -34,7 +34,7 @@ final class CellEdits {
 
     static void attach(Session session, String catalog, String schema, String name, Result result) {
         try {
-            Table table = inspect(session.connection, catalog, schema, name);
+            Table table = inspect(session, catalog, schema, name);
             if (table.names.size() != result.columns.size()) throw new AppException("表结构已变化，请刷新预览");
             for (int i = 0; i < table.names.size(); i++) {
                 Column column = result.columns.get(i);
@@ -52,10 +52,25 @@ final class CellEdits {
         }
     }
 
+    private static Table inspect(Session session, String catalog, String schema, String name) throws SQLException {
+        Connection connection = session.connection;
+        Savepoint point = connection.getAutoCommit() ? null : connection.setSavepoint();
+        try {
+            Table table = inspect(connection, catalog, schema, name);
+            if (point != null) connection.releaseSavepoint(point);
+            return table;
+        } catch (SQLException | AppException failure) {
+            if (point != null) {
+                try { connection.rollback(point);connection.releaseSavepoint(point); }
+                catch (SQLException rollback) { session.state = "BROKEN";sessionsBroken(session);throw rollback; }
+            }
+            throw failure;
+        }
+    }
     private static Table inspect(Connection connection, String catalog, String schema, String name) throws SQLException {
         String dialect = SqlDialect.detect(connection, null);
-        if (!Arrays.asList("H2", "POSTGRESQL", "MYSQL").contains(dialect))
-            throw new AppException("此数据库尚未适配单元格编辑（支持 H2、PostgreSQL、MySQL InnoDB）");
+        if (!Arrays.asList("H2", "POSTGRESQL", "GAUSSDB", "MYSQL").contains(dialect))
+            throw new AppException("此数据库尚未适配单元格编辑（H2、PostgreSQL、GaussDB 兼容路径、MySQL InnoDB）");
         DatabaseMetaData md = connection.getMetaData();
         if (!md.supportsTransactions() || !md.supportsSavepoints()) throw new AppException("驱动不支持事务与保存点");
         if (connection.isReadOnly()) throw new AppException("连接为只读");
@@ -70,7 +85,7 @@ final class CellEdits {
                 if (!"TABLE".equals(type) && !"BASE TABLE".equals(type)) throw new AppException("视图或非普通表不可编辑");
                 matches++;
             }
-        }
+        } catch (SQLException ex) { throw new AppException("读取表类型元数据失败：" + SessionService.safe(ex)); }
         if (matches != 1) throw new AppException("无法唯一识别普通表，请指定 catalog/schema");
         table.qualified = SqlDialect.qualified(connection, table.catalog, table.schema, table.name);
         if ("MYSQL".equals(dialect)) {
@@ -84,15 +99,17 @@ final class CellEdits {
         List<String> keyNames = new ArrayList<String>();
         try (ResultSet rs = md.getPrimaryKeys(table.catalog, table.schema, table.name)) {
             while (rs.next()) if (matches(rs, table)) keyNames.add(rs.getString("COLUMN_NAME"));
-        }
+        } catch (SQLException ex) { throw new AppException("读取主键元数据失败：" + SessionService.safe(ex)); }
         if (keyNames.isEmpty()) throw new AppException("表没有主键，无法安全定位记录");
         StringBuilder signature = new StringBuilder(table.qualified);
+        Map<String, ColumnGeneration.Flags> generation = new LinkedHashMap<String, ColumnGeneration.Flags>();
         try (ResultSet rs = md.getColumns(table.catalog, SqlDialect.exactPattern(md, table.schema), SqlDialect.exactPattern(md, table.name), null)) {
+            Map<String, Integer> labels = ColumnGeneration.labels(rs);
             while (rs.next()) if (matches(rs, table)) {
                 String column = rs.getString("COLUMN_NAME");int type = rs.getInt("DATA_TYPE");
                 boolean key = keyNames.contains(column);
-                String generated = rs.getString("IS_GENERATEDCOLUMN"), identity = rs.getString("IS_AUTOINCREMENT");
-                String reason = key ? "主键列只读" : !"NO".equals(generated) || !"NO".equals(identity) ? "生成列、自增列或生成属性未知的列只读" : !supported(type) ? "此字段类型暂不支持编辑" : null;
+                generation.put(column, ColumnGeneration.jdbc(rs, labels));
+                String reason = key ? "主键列只读" : !supported(type) ? "此字段类型暂不支持编辑" : null;
                 if (key) {
                     if (!supported(type)) throw new AppException("主键类型不支持安全回写");
                     table.keys.add(table.names.size());
@@ -100,6 +117,14 @@ final class CellEdits {
                 table.names.add(column);table.types.add(type);table.nullable.add(rs.getInt("NULLABLE") == DatabaseMetaData.columnNullable);table.reasons.add(reason);
                 signature.append('|').append(column).append(':').append(type).append(':').append(rs.getString("TYPE_NAME")).append(':').append(rs.getInt("COLUMN_SIZE")).append(':').append(rs.getInt("DECIMAL_DIGITS")).append(':').append(reason).append(':').append(table.nullable.get(table.nullable.size()-1));
             }
+        } catch (SQLException ex) { throw new AppException("读取字段元数据失败：" + SessionService.safe(ex)); }
+        if (Arrays.asList("POSTGRESQL", "GAUSSDB").contains(dialect) && generation.values().stream().anyMatch(ColumnGeneration.Flags::unknown)) {
+            try { ColumnGeneration.supplement(connection, table.schema, table.name, generation); }
+            catch (SQLException ex) { throw new AppException("生成列元数据兼容查询失败：" + SessionService.safe(ex)); }
+        }
+        for (int i = 0; i < table.names.size(); i++) {
+            if (table.reasons.get(i) == null) table.reasons.set(i, generation.get(table.names.get(i)).readOnlyReason());
+            signature.append('|').append(table.reasons.get(i));
         }
         if (table.keys.size() != keyNames.size()) throw new AppException("主键元数据不完整");
         table.signature = signature.toString();return table;
@@ -137,7 +162,7 @@ final class CellEdits {
     }
     static void run(Session session, ExecutionRequest request, ExecutionRecord record, UnitResult unit, Edit edit) throws SQLException {
         Connection connection = session.connection;
-        Table fresh = inspect(connection, edit.table.catalog, edit.table.schema, edit.table.name);
+        Table fresh = inspect(session, edit.table.catalog, edit.table.schema, edit.table.name);
         if (!fresh.signature.equals(edit.table.signature)) throw new AppException("表结构已变化，请刷新预览后重试");
         boolean autoCommit = connection.getAutoCommit(), completed = false, rolledBack = false;
         Savepoint savepoint = null;
