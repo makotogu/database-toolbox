@@ -2,6 +2,8 @@
 
 日期：2026-09-18。分支：`codex/gauss-cell-edit-compat`，基于 `codex/table-filters` 的功能预览。公开 v2.0.0 Release 未改动。
 
+2026-09-23 合并前复核：修复同时存在 `attgenerated` / `adgencol` 时空标记掩盖生成标记的问题，任一标记为生成即只读。新增 H2 集成用例先失败再通过，`CellEditingTest` 21 项通过。JDK 8 全量验证共 111 项、0 失败，其中需外部 PostgreSQL 环境的 1 项跳过。以下 2026-09-18 产物与厂商验证记录保留其历史范围，不代表新提交已在 GaussDB 内网完成验收。
+
 ## 触发和证据
 
 用户报告 GaussDB 表预览提示“只读：数据库操作失败（SQLState 42703）”，无法双击编辑。环境为 503 SPC2000C，厂商驱动 `GaussDBV5-503.1.0.spc2000c_26.7.13.jar`，驱动类 `org.postgresql.Driver`。同一驱动在 DBeaver 的 PostgreSQL 连接中可编辑。JAR 位于内网，用户同意先做兼容修复，不提供驱动。

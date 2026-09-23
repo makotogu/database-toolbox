@@ -61,6 +61,17 @@ class CellEditingTest {
         assertEquals("SUCCEEDED",execute(edit(source,0,1,"new",false)).state);
         assertEquals("NEW",value("SELECT derived FROM cells WHERE id=1"));
     }
+    @Test void gaussGenerationMarkerCannotBeOverriddenByEmptyPostgresMarker() throws Exception {
+        sql("CREATE TABLE cells(id INT PRIMARY KEY, name VARCHAR, derived VARCHAR GENERATED ALWAYS AS (UPPER(name)))");
+        sql("INSERT INTO cells(id,name) VALUES(1,'old')");
+        LegacyMetadata fixture=legacyMetadata("GaussDB",false);fixture.emptyAttributeGeneration=true;
+        ExecutionRecord source=preview("CELLS");
+        assertTrue(grid(source).columns.get(1).editable,grid(source).readOnlyReason);
+        assertFalse(grid(source).columns.get(2).editable,"adgencol='s' must retain generated-column protection when attgenerated is empty");
+        assertThrows(AppException.class,()->executions.prepare(edit(source,0,2,"forbidden",false)));
+        assertEquals("SUCCEEDED",execute(edit(source,0,1,"safe",false)).state);
+        assertEquals("SAFE",value("SELECT derived FROM cells WHERE id=1"));
+    }
     @Test void missingCatalogGenerationFlagOnlyAllowsColumnsWithoutDefaults() throws Exception {
         create();LegacyMetadata fixture=legacyMetadata("GaussDB",false);fixture.generationColumn=false;
         ExecutionRecord source=preview("CELLS");assertTrue(grid(source).columns.get(1).editable);
@@ -99,7 +110,7 @@ class CellEditingTest {
         assertEquals("FAILED",result.state);assertTrue(result.message.contains("表结构"));assertEquals(7,value("SELECT required FROM cells WHERE id=1"));
     }
     static class LegacyMetadata {
-        boolean catalogFailure, missingIdentity, identityColumn, generationColumn=true;
+        boolean catalogFailure, missingIdentity, identityColumn, emptyAttributeGeneration, generationColumn=true;
         int savepointRollbacks;
     }
     // Simulates an older vendor driver's optional metadata field and catalog shape; writes use real H2 JDBC.
@@ -130,6 +141,7 @@ class CellEditingTest {
                 return raw.prepareStatement("SELECT COLUMN_NAME AS attname, COLUMN_DEFAULT IS NOT NULL OR IS_GENERATED='ALWAYS' AS atthasdef, " +
                     "CASE WHEN COLUMN_DEFAULT IS NOT NULL OR IS_GENERATED='ALWAYS' THEN ORDINAL_POSITION ELSE NULL END AS adnum" +
                     (fixture.generationColumn?", CASE WHEN IS_GENERATED='ALWAYS' THEN 's' ELSE '' END AS adgencol":"") +
+                    (fixture.emptyAttributeGeneration?", '' AS attgenerated":"") +
                     (fixture.identityColumn?", CASE WHEN IS_IDENTITY='YES' THEN 'd' ELSE '' END AS attidentity":"") +
                     " FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION");
             }

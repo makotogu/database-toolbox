@@ -63,9 +63,11 @@ final class ColumnGeneration {
                     } else if (knownDefault && !hasDefault && !defaultRow) {
                         // PG/Gauss generated expressions require a pg_attrdef row and atthasdef.
                         generated = false;
-                    } else if (defaultRow && labels.containsKey("ADGENCOL")) {
+                    }
+                    if (defaultRow && labels.containsKey("ADGENCOL")) {
                         String value = optional(rs, labels, "ADGENCOL");
-                        if (value != null) generated = !zero(value);
+                        // Compatibility catalogs may expose both markers; either positive is authoritative.
+                        if (value != null && (generated == null || !zero(value))) generated = !zero(value);
                     }
                     if (flags.generated == null || Boolean.TRUE.equals(generated)) flags.generated = generated;
                     String identity = optional(rs, labels, "ATTIDENTITY");
