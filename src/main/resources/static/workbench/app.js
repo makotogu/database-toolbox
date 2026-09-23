@@ -1299,7 +1299,7 @@ async function closeTab(id) {
   const t = state.tabs.find((x) => x.id === id);
   if (!t) return true;
   if (busy(t)) {
-    toast("请先取消当前标签中正在运行的执行。", true);
+    toast(t.closing ? "正在关闭此标签，请稍候。" : "请先取消当前标签中正在运行的执行。", true);
     return false;
   }
   rememberEditor();
@@ -1363,7 +1363,7 @@ async function copyText(value) {
   }
   toast("已复制到剪贴板。");
 }
-function cellDetail(cell) {
+function cellDetail(cell, viewOnly = false) {
   const t = tab(),
     key = cell.dataset.result,
     ri = Number(cell.dataset.row),
@@ -1371,7 +1371,7 @@ function cellDetail(cell) {
   let value, label;
   if (/^\d+$/.test(key)) {
     selectCell(cell);
-    if (t.type === "table") return editCellDialog(t, Number(key), ri, ci);
+    if (t.type === "table" && !viewOnly) return editCellDialog(t, Number(key), ri, ci);
   }
   if (key.startsWith("structure-")) {
     const items = t.structure[key.slice(10)] || [],
@@ -1651,7 +1651,7 @@ function cellMenu(cell) {
   const result=allResults(t)[index], execution=t.execution?.id;
   if (!/^\d+$/.test(cell.dataset.result)||!result?.columns?.[col]||!result.rows?.[row]) return null;
   const valid=()=>!cell.isConnected||!state.tabs.includes(t)||tab()!==t||t.execution?.id!==execution||allResults(t)[index]?.rows!==result.rows ? "结果已变化，请重新选择单元格" : "";
-  return {title:result.columns[col].label,items:[menuCommand("查看单元格",()=>cellDetail(cell),valid),menuCommand("编辑单元格",()=>editCellDialog(t,index,row,col),()=>valid()||cellReadOnly(t,result,row,col)),menuCommand("复制单元格值",()=>copyText(result.rows[row][col]==null?"NULL":formatValue(result.rows[row][col])),valid)]};
+  return {title:result.columns[col].label,items:[menuCommand("查看单元格",()=>cellDetail(cell,true),valid),menuCommand("编辑单元格",()=>editCellDialog(t,index,row,col),()=>valid()||cellReadOnly(t,result,row,col)),menuCommand("复制单元格值",()=>copyText(result.rows[row][col]==null?"NULL":formatValue(result.rows[row][col])),valid)]};
 }
 function openMenu(el, event) {
   if ($("#dialog").open) return false;
@@ -1900,9 +1900,11 @@ const actions = {
     renderTab(tab());
   },
   "table-data": () => {
-    captureTableFilters(tab());
-    tab().tableView = "data";
-    renderTab(tab());
+    const t = tab();
+    captureTableFilters(t);
+    t.tableView = "data";
+    renderTab(t);
+    if (!t.execution && !t.loading && !busy(t)) return readTable(t);
   },
   "filter-add": () => {
     const t = tab(); if (busy(t)) return; captureTableFilters(t);

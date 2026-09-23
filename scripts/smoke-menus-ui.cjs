@@ -20,6 +20,7 @@ Environment:
 Checks menu keyboard/focus behavior, disabled actions, SQL copy session isolation,
 inactive-tab actions, manual-transaction close confirmation and pending-close locks,
 canceled batch closure, metadata-only structure entry,
+first data load from the View menu, separate cell viewing/editing,
 desktop/narrow layout and browser errors. Browser plugin not available; uses Playwright.`);
   process.exit(0);
 }
@@ -296,11 +297,35 @@ async function assertMenuFits() {
     await choose('复制对象名称');
     assert.match(await page.evaluate(() => navigator.clipboard.readText()), /MENU_UI/);
     assert.equal(submitted.length, beforeStructure);
+    await openMenu('view');
+    await choose('查看表数据');
+    await page.waitForFunction(() => document.querySelector('#results [data-cell][data-row="0"][data-column="1"]')?.textContent === '菜单夹具' && !document.querySelector('[data-action="table-read"]')?.disabled);
+    assert.equal(submitted.length, beforeStructure + 1, 'first View-menu data entry must submit exactly one preview');
+    assert.equal(submitted.at(-1).mode, 'TABLE_PREVIEW');
     await object.locator('..').locator('[data-menu-trigger="object"]').click();
     await choose('查看数据');
-    await page.waitForFunction(() => document.querySelector('#results [data-cell][data-row="0"][data-column="1"]')?.textContent === '菜单夹具');
-    assert.equal(submitted.at(-1).mode, 'TABLE_PREVIEW');
-    console.log('PASS object context/More menus: structure reads metadata only, name copy, explicit data preview');
+    await page.waitForLoadState('networkidle');
+    assert.equal(submitted.length, beforeStructure + 1, 'object data entry must reuse its existing preview');
+    const titleCell = page.locator('#results [data-cell][data-row="0"][data-column="1"]');
+    assert.equal(await titleCell.textContent(), '菜单夹具');
+    await titleCell.click({button: 'right'});
+    await menu().waitFor({state: 'visible'});
+    await choose('查看单元格');
+    await page.locator('#dialog').waitFor({state: 'visible'});
+    assert.equal(await page.locator('#dialog #cell-value').textContent(), '菜单夹具');
+    assert.equal(await page.locator('#dialog input, #dialog textarea, #dialog [contenteditable="true"]').count(), 0, 'viewing an editable cell must expose no editing inputs');
+    assert.equal(await page.locator('#dialog [data-action="save-cell"]').count(), 0, 'viewing a cell must expose no save action');
+    await closeDialog();
+    await titleCell.click({button: 'right'});
+    await menu().waitFor({state: 'visible'});
+    await choose('编辑单元格');
+    await page.locator('#dialog #cell-input').waitFor({state: 'visible'});
+    assert.ok(await page.locator('#dialog #cell-input').isEditable(), 'explicit cell editing must expose an editable input');
+    assert.equal(await page.locator('#dialog #cell-input').inputValue(), '菜单夹具');
+    assert.ok(await page.locator('#dialog [data-action="save-cell"]').isEnabled(), 'explicit cell editing must expose an enabled save action');
+    await closeDialog();
+    assert.equal(submitted.length, beforeStructure + 1, 'opening cell view/edit dialogs must not execute SQL');
+    console.log('PASS object menus and View data entry: metadata-only structure, one initial preview, reuse without re-query, separate cell view/edit dialogs');
 
     await openMenu('help');
     await choose('键盘快捷键');
