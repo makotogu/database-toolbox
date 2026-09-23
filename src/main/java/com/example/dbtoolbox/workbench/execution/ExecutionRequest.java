@@ -18,6 +18,7 @@ public class ExecutionRequest {
     public boolean descending;
     public int offset;
     public int limit = 200;
+    public String filterMatch = "ALL";
     public List<Map<String,Object>> filters = new ArrayList<Map<String,Object>>();
     public CellChange cellChange;
     public static class CellChange {

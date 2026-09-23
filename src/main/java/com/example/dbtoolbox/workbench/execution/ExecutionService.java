@@ -66,7 +66,7 @@ public class ExecutionService {
                 if("MYSQL".equals(actualDialect))plan.previewSchema=null;
                 else if(plan.previewSchema==null||plan.previewSchema.isEmpty())plan.previewSchema=session.connection.getSchema();
             }
-            SqlDialect.PreviewQuery query=SqlDialect.previewSql(session.connection,session.dialect,plan.previewCatalog,plan.previewSchema,request.table,request.filters,request.orderBy,request.descending,request.offset,request.limit);
+            SqlDialect.PreviewQuery query=SqlDialect.previewSql(session.connection,session.dialect,plan.previewCatalog,plan.previewSchema,request.table,request.filters,request.filterMatch,request.orderBy,request.descending,request.offset,request.limit);
             plan.units=Collections.singletonList(ScriptSplitter.block(query.sql,session.dialect));plan.values=query.params;plan.warnings.addAll(query.warnings);
         } else if("CELL_UPDATE".equals(mode)) {
             ExecutionRequest.CellChange change=request.cellChange;

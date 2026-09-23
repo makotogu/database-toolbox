@@ -47,6 +47,32 @@ class ConnectionServiceTest {
     }
     @AfterEach void cleanup() { drivers.shutdown(); }
 
+    @Test void demoUsesBundledH2AndReusesOnlyUnmodifiedManagedProfile() throws Exception {
+        assertThrows(AppException.class, () -> connections.demo()); // An imported H2 is not the managed driver.
+        new com.example.dbtoolbox.workbench.driver.BundledDriverInstaller(drivers, mapper).install();
+        ConnectionProfile unrelated = request("jdbc:h2:mem:user_owned");
+        unrelated.name = "H2 演示";
+        connections.save(unrelated);
+        ConnectionProfile demo = connections.demo();
+        assertFalse(demo.saveSqlDrafts);
+        assertNull(demo.password);
+        assertEquals(demo.id, connections.demo().id);
+        assertEquals(demo.id, new ConnectionService(paths, mapper, drivers).demo().id);
+        try (Connection jdbc = connections.open(demo.id); java.sql.Statement statement = jdbc.createStatement();
+             java.sql.ResultSet result = statement.executeQuery("SELECT 1")) {
+            assertTrue(result.next());
+            assertEquals(1, result.getInt(1));
+        }
+        demo.jdbcUrl = "jdbc:h2:mem:user_changed";
+        connections.save(demo);
+        ConnectionProfile replacement = connections.demo();
+        assertNotEquals(demo.id, replacement.id);
+        assertEquals("jdbc:h2:mem:user_changed", connections.get(demo.id).jdbcUrl);
+        assertEquals(3, connections.list().size());
+        connections.delete(replacement.id);
+        assertNotEquals(replacement.id, connections.demo().id);
+    }
+
     @Test void propertiesAuthenticationAndPasswordRetainReplaceClearAreReal() throws Exception {
         ConnectionProfile initial = request("jdbc:h2:mem:credentials;DB_CLOSE_DELAY=-1");
         initial.password = "initial-secret";
